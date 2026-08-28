@@ -78,6 +78,7 @@ but they are part of what a user ends up running.
 | whisperx | BSD-2-Clause **(confirm)** |
 | pyannote.audio | MIT |
 | onnxruntime | MIT |
+| onnx-asr (optional, Parakeet) | MIT **(confirm)** |
 | mlx-whisper (Apple Silicon only) | MIT **(confirm)** |
 | gliner (optional, PII) | Apache-2.0 **(confirm)** |
 
@@ -93,6 +94,8 @@ model card.
 |---|---|---|
 | [Systran/faster-whisper-large-v3](https://huggingface.co/Systran/faster-whisper-large-v3) | Transcription (Windows/Linux) | MIT — OpenAI Whisper weights |
 | [mlx-community/whisper-large-v3-mlx](https://huggingface.co/mlx-community/whisper-large-v3-mlx) | Transcription (Apple Silicon) | MIT — same weights, MLX conversion |
+| [istupakov/parakeet-tdt-0.6b-v3-onnx](https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx) | Transcription (optional, all platforms) | ONNX port of NVIDIA Parakeet TDT 0.6B v3, CC-BY-4.0 **(confirm on the model card)** |
+| [istupakov/silero-vad-onnx](https://huggingface.co/istupakov/silero-vad-onnx) | Speech boundaries for Parakeet | Silero VAD, MIT **(confirm the port)** |
 | [pyannote/speaker-diarization-community-1](https://huggingface.co/pyannote/speaker-diarization-community-1) | Diarization | Gated — you must accept the conditions on the model page with your own account **(confirm the license line)** |
 | [pyannote/wespeaker-voxceleb-resnet34-LM](https://huggingface.co/pyannote/wespeaker-voxceleb-resnet34-LM) | Speaker embeddings | **(confirm on the model card)** |
 | [urchade/gliner_multi_pii-v1](https://huggingface.co/urchade/gliner_multi_pii-v1) | Optional PII removal | Apache-2.0 **(confirm)** |

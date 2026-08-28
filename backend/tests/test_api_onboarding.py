@@ -57,6 +57,29 @@ class TestOnboardingAPI:
         data = r.get_json()
         assert data.get('ok') is True
 
+    @patch('app.api.onboarding.download_models')
+    def test_start_download_fetches_the_chosen_engine(self, mock_download, client):
+        """The download must follow the engine chosen on the modules step.
+
+        Regression: /download/start called get_models_for_setup without the
+        chosen id, so picking parakeet saved the setting but downloaded the
+        default whisper set. Transcription then loaded the parakeet engine
+        against weights and a library that were never installed, and died with
+        No module named 'onnx_asr' — long after setup reported success.
+        """
+        client.post('/api/onboarding/modules', json={
+            'modules': ['transcription'],
+            'stt_model_id': 'parakeet-tdt-0.6b-v3',
+        })
+        client.post('/api/onboarding/storage', json={
+            'models_path': '/tmp/models', 'projects_path': '/tmp/projects',
+        })
+
+        r = client.post('/api/onboarding/download/start', json={})
+        assert r.status_code == 200
+        assert 'parakeet-tdt-0.6b-v3' in r.get_json()['model_ids']
+        assert 'parakeet-tdt-0.6b-v3' in mock_download.call_args[0][1]
+
     def test_onboarding_download_status(self, client):
         r = client.get('/api/onboarding/download/status')
         assert r.status_code == 200

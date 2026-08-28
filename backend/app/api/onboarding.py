@@ -193,7 +193,11 @@ def set_modules():
     modules = data.get('modules', [])
     Setting.set('onboarding_modules', ','.join(modules))
 
-    stt_model_id = normalize_stt_model_id(Setting.get('stt_model_id', get_default_stt_model()))
+    # The recognition engine is chosen on this step too. An absent or unrunnable
+    # id normalizes to the platform default, so an older client that posts only
+    # modules behaves exactly as before.
+    stt_model_id = normalize_stt_model_id(
+        data.get('stt_model_id') or Setting.get('stt_model_id', get_default_stt_model()))
     Setting.set('stt_model_id', stt_model_id)
     model_ids = get_models_for_setup(modules, stt_model_id)
     total = sum(

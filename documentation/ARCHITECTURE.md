@@ -32,7 +32,7 @@ PINE/
 │   │   ├── extensions.py  # db, socketio, ALLOWED_ORIGINS
 │   │   └── __init__.py    # create_app, routes
 │   ├── ml_worker/         # The ML process — torch/whisperx/pyannote live only here
-│   │   ├── engines/       # whisperx_engine (CUDA/CPU), mlx_engine (Apple Silicon), base
+│   │   ├── engines/       # whisperx_engine (CUDA/CPU), mlx_engine (Apple Silicon), parakeet_onnx_engine (either), base
 │   │   ├── pipeline.py    # stage orchestration
 │   │   ├── diarize.py     # pyannote
 │   │   ├── tracks.py      # per-speaker track handling
@@ -113,7 +113,8 @@ projects/<folder_name>/
   WhisperX and pyannote are imported **only** in that child process, so a CUDA
   crash or an OOM kills the worker, not the backend
 - **Engines:** `ml_worker/engines/` — `whisperx_engine` on CUDA/CPU,
-  `mlx_engine` on Apple Silicon, behind a common `base.py` interface
+  `mlx_engine` on Apple Silicon, and the optional `parakeet_onnx_engine` on
+  either, behind a common `base.py` interface
 - **Device:** Auto-detects CUDA; falls back to CPU with int8
 - **Progress:** SocketIO emits `transcription:status` — `{ recording_id, status, stage, message, percent? }`
 - **Language:** the worker detects it. Below `LANG_CONFIDENCE_MIN` (0.82), or with

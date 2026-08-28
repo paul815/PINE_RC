@@ -90,6 +90,22 @@ MODEL_REGISTRY = {
         'language': 'multi',
         'platform': 'darwin',       # Mac only
     },
+    'parakeet-tdt-0.6b-v3': {
+        'name': 'Parakeet TDT 0.6B v3 (ONNX)',
+        'function': 'stt',
+        # ONNX export of nvidia/parakeet-tdt-0.6b-v3. Carries fp32 (2.4 GB) and
+        # int8 (0.6 GB) side by side; the engine picks by device.
+        'repo_id': 'istupakov/parakeet-tdt-0.6b-v3-onnx',
+        'size_bytes': 3_220_000_000,
+        'required': False,          # opt-in alternative, never part of setup
+        'language': 'multi',
+        'platform': 'all',          # onnxruntime covers CUDA, CPU and CoreML
+        # onnx-asr slices long audio on silence rather than on a fixed grid, so
+        # the VAD ships with the model — 2 MB, and without it the engine would
+        # reach for the hub mid-job on an offline install.
+        'companion_repo': 'istupakov/silero-vad-onnx',
+        'companion_subdir': 'vad',
+    },
     'pyannote-diarization': {
         'name': 'pyannote speaker-diarization-community-1',
         'function': 'diarization',
@@ -330,6 +346,7 @@ def validate_hf_token(token):
 STT_MODEL_QUALITY = 'whisperx-large-v3'
 
 MLX_STT_MODEL_QUALITY = 'mlx-whisper-large-v3'
+STT_MODEL_PARAKEET = 'parakeet-tdt-0.6b-v3'
 
 LEGACY_STT_MODEL_ID_ALIASES = {
     'whisperx-large-v3-turbo': STT_MODEL_QUALITY,
@@ -341,15 +358,22 @@ def get_default_stt_model():
     return MLX_STT_MODEL_QUALITY if IS_MAC else STT_MODEL_QUALITY
 
 def supported_stt_models():
-    """STT model IDs a user may choose on this platform, best-quality first."""
-    return (get_default_stt_model(),)
+    """STT model IDs this platform can actually run, platform default first.
+
+    Parakeet is on both: onnxruntime needs neither torch nor Metal, so the one
+    engine covers CUDA, plain CPU and Apple Silicon.
+    """
+    return [get_default_stt_model(), STT_MODEL_PARAKEET]
+
 
 def normalize_stt_model_id(stt_model_id):
-    """Map legacy/foreign/invalid STT IDs onto one this platform can run.
+    """Map legacy or unrunnable STT IDs to something this platform can run.
 
-    Mac is mlx-only for Whisper: ``whisperx-large-v3`` is never registered (see
+    Mac is whisper-mlx only: ``whisperx-large-v3`` is never registered (see
     ``_model_for_platform``) and WhisperX is never pip-installed there, so letting
     that ID through only produces ``No module named 'whisperx'`` at transcribe time.
+    The same guard now admits anything in ``supported_stt_models()`` instead of
+    the single default, which is what makes the engine switch possible at all.
     """
     model_id = (stt_model_id or '').strip()
     if model_id in LEGACY_STT_MODEL_ID_ALIASES:
@@ -359,9 +383,16 @@ def normalize_stt_model_id(stt_model_id):
         return get_default_stt_model()
     return model_id
 
+
 def get_models_for_setup(modules, stt_model_id=None):
-    """Return list of model IDs to download based on user choices."""
-    stt_model = normalize_stt_model_id(stt_model_id) if stt_model_id else get_default_stt_model()
+    """Return list of model IDs to download based on user choices.
+
+    ``stt_model_id`` is the engine picked during onboarding; anything this
+    platform cannot run falls back to the default, same as everywhere else.
+    Omitting it keeps the old behaviour — the platform default.
+    """
+    stt_model = (normalize_stt_model_id(stt_model_id) if stt_model_id
+                 else get_default_stt_model())
     ids = [
         stt_model,
         'pyannote-diarization',
@@ -747,6 +778,23 @@ def download_models(app, model_ids, models_path, hf_token=None, finish_onboardin
                                         )
                                     except Exception as tok_exc:
                                         log.warning('Tokenizer file %s download failed: %s', tf, tok_exc)
+
+                        # A second repo the engine needs beside the weights —
+                        # parakeet's VAD. Small, but not optional: without it
+                        # onnx-asr would fetch from the hub during a job, which
+                        # an offline install cannot do.
+                        comp_repo = info.get('companion_repo')
+                        comp_subdir = info.get('companion_subdir')
+                        if comp_repo and comp_subdir:
+                            comp_dest = os.path.join(dest, comp_subdir)
+                            _install_emit(f'Downloading {comp_subdir} for {model.name}...')
+                            try:
+                                snapshot_download(repo_id=comp_repo,
+                                                  local_dir=comp_dest,
+                                                  token=hf_token)
+                            except Exception as comp_exc:
+                                log.warning('Companion repo %s download failed: %s',
+                                            comp_repo, comp_exc)
 
                         model.status = 'ready'
                         model.path = final_path if use_pyc else dest

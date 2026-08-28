@@ -213,9 +213,45 @@ body { font-size: inherit; }
   border-radius: calc(var(--radius) + 4px); padding: 13px 15px;
   cursor: pointer; transition: all 0.15s;
 }
+.mod-group-lbl {
+  font-size: 12px; font-weight: 600; letter-spacing: 0.03em;
+  text-transform: uppercase; color: var(--muted-fg); margin: 4px 0 8px;
+}
+.mod-group-lbl + .module-list { margin-bottom: 6px; }
+.mod-note { font-size: 12px; color: var(--muted-fg); margin: 0 0 18px; }
+.mod-item .radio {
+  width: 17px; height: 17px; border-radius: 50%;
+  border: 1.5px solid var(--border); background: var(--muted);
+  flex-shrink: 0; margin-top: 2px;
+}
+.mod-item.checked .radio {
+  border-color: var(--accent); background: var(--accent);
+  box-shadow: inset 0 0 0 3.5px var(--card);
+}
 .mod-item:hover:not(.locked) { border-color: var(--accent-bd); }
 .mod-item.checked { border-color: var(--accent-bd); background: var(--accent-dim); }
 .mod-item.locked { cursor: default; }
+/* The engine picker, nested inside the locked Transcription module. Lighter
+   than .mod-item on purpose — it is a choice within a row, not a row. */
+.stt-choice { display: flex; flex-direction: column; gap: 6px; margin: 6px 0 2px; }
+.stt-opt {
+  display: flex; align-items: flex-start; gap: 9px;
+  border: 1.5px solid var(--border); border-radius: var(--radius);
+  padding: 8px 10px; cursor: pointer; transition: all 0.15s;
+}
+.stt-opt:hover { border-color: var(--accent-bd); }
+.stt-opt.checked { border-color: var(--accent-bd); background: var(--accent-dim); }
+.stt-opt .radio {
+  width: 14px; height: 14px; border-radius: 50%;
+  border: 1.5px solid var(--border); background: var(--muted);
+  flex-shrink: 0; margin-top: 2px;
+}
+.stt-opt.checked .radio {
+  border-color: var(--accent); background: var(--accent);
+  box-shadow: inset 0 0 0 3px var(--card);
+}
+.stt-opt-name { font-size: 13px; font-weight: 500; }
+.stt-opt-note { font-size: 12px; color: var(--muted-fg); margin-top: 1px; }
 .chk {
   width: 17px; height: 17px; border-radius: var(--radius-sm);
   border: 1.5px solid var(--border); background: var(--muted);
@@ -592,6 +628,11 @@ body { font-size: inherit; }
         <svg viewBox="0 0 14 14" fill="none"><path d="M11 4.5H8.5V3a2 2 0 00-4 0v1.5H3a1 1 0 00-1 1V11a1 1 0 001 1h8a1 1 0 001-1V5.5a1 1 0 00-1-1zM6 3a.5.5 0 011 0v1.5H6V3z" stroke="currentColor" stroke-width="1.1" stroke-linejoin="round"/></svg>
         <span>All models run fully offline after download. Nothing from your interviews ever leaves your computer.</span>
       </div>
+      <div class="mod-group-lbl">Recognition model</div>
+      <div class="module-list" id="sttChoiceList"></div>
+      <div class="mod-note">You can download the other one later in Settings and switch between them — neither is deleted.</div>
+
+      <div class="mod-group-lbl">Modules</div>
       <div class="module-list">
         <div class="mod-item locked checked">
           <div class="chk"><svg viewBox="0 0 9 9" fill="none"><path d="M1.5 4.5l2 2 4-4" stroke="white" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
@@ -600,7 +641,7 @@ body { font-size: inherit; }
             <div class="stt-choice" id="sttChoice"></div>
             <div class="mod-desc" id="baseModDesc"></div>
           </div>
-          <div class="setup-size-meta" id="baseSizeLabel">~4 GB</div>
+          <div class="setup-size-meta" id="baseSizeLabel">~1 GB</div>
         </div>
         <div class="mod-item" id="mod-pii" onclick="toggleMod(this,'pii',500)">
           <div class="chk"><svg viewBox="0 0 9 9" fill="none"><path d="M1.5 4.5l2 2 4-4" stroke="white" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
@@ -1102,7 +1143,7 @@ function updateTotal() {
   checkedMods.forEach(k => { total += modSizes[k] || 0; });
   document.getElementById('totalSize').textContent = '~' + (total / 1000).toFixed(1) + ' GB';
   const baseEl = document.getElementById('baseSizeLabel');
-  if (baseEl) baseEl.textContent = '~' + ((sttMB + diarMB) / 1000).toFixed(1) + ' GB';
+  if (baseEl) baseEl.textContent = '~' + (diarMB / 1000).toFixed(1) + ' GB';
 }
 let isMac = false;         // set from /status API
 let sttModels = [];        // what this platform offers, from /status
@@ -1112,16 +1153,46 @@ let sttModelId = '';       // the one this setup will download
 const STT_MODEL_NOTES = {
   'whisperx-large-v3': 'runs on the GPU',
   'mlx-whisper-large-v3': 'runs on the Neural Engine',
+  'parakeet-tdt-0.6b-v3': 'needs no graphics card, and finds the language itself across 25 European languages',
 };
+
+function selectSttModel(id) {
+  sttModelId = id;
+  renderSttChoice();
+  updateTotal();   // the models differ in size, so the total moves with the choice
+}
 
 function renderSttChoice() {
   const host = document.getElementById('sttChoice');
   if (!host) return;
-  const model = (sttModels || []).find(m => m.id === sttModelId) || sttModels[0];
-  const note = model ? (STT_MODEL_NOTES[model.id] || '') : '';
-  host.innerHTML = model
-    ? `<div class="mod-desc">${model.name}${note ? ' &mdash; ' + note : ''}</div>`
-    : '';
+  const models = sttModels || [];
+  if (!models.length) { host.innerHTML = ''; return; }
+
+  // One engine still reads as a line rather than a table of one. Two or more
+  // have to be choosable here: the choice decides both what setup downloads
+  // and what every later job runs on.
+  if (models.length === 1) {
+    const only = models[0];
+    const note = STT_MODEL_NOTES[only.id] || '';
+    host.innerHTML =
+      `<div class="mod-desc">${esc(only.name)}${note ? ' &mdash; ' + esc(note) : ''}</div>`;
+    return;
+  }
+
+  if (!models.some(m => m.id === sttModelId)) sttModelId = models[0].id;
+  host.innerHTML = models.map(m => `
+    <div class="stt-opt${m.id === sttModelId ? ' checked' : ''}" data-stt-id="${esc(m.id)}">
+      <div class="radio"></div>
+      <div>
+        <div class="stt-opt-name">${esc(m.name)}</div>
+        <div class="stt-opt-note">${esc(STT_MODEL_NOTES[m.id] || '')}</div>
+      </div>
+    </div>`).join('');
+  // Bound here rather than through an inline onclick so no model name or id ever
+  // has to survive a trip through an attribute as code.
+  host.querySelectorAll('.stt-opt').forEach(el => {
+    el.onclick = () => selectSttModel(el.dataset.sttId);
+  });
 }
 
 function onModulesStepShow() {

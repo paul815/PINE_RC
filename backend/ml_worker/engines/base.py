@@ -80,6 +80,20 @@ class EngineAdapter(ABC):
     id: str = ''
     capabilities: EngineCapabilities = EngineCapabilities()
 
+    # True when the caller has already removed the silence and spliced the
+    # speech together, joining turns with a fixed gap — what multitrack does
+    # before handing over a track. An engine that runs its own VAD must key its
+    # thresholds to that gap: those joins are the only boundaries left, and
+    # missing one merges a turn from minute 3 into a turn from minute 40.
+    presegmented: bool = False
+
+    # The regions that were spliced together, as ``[(start, end, ...)]`` in the
+    # handed-over audio's own clock. Set alongside ``presegmented`` when the
+    # caller knows them. They are the exact boundaries, which is worth more than
+    # any threshold: a VAD cannot tell a 0.2 s splice from a 0.2 s breath, so an
+    # engine given these must cut on them and not guess.
+    presegmented_regions: list | None = None
+
     def __init__(self, env=None):
         self.env = env
 

@@ -283,6 +283,21 @@ body { font-size: inherit; }
 .sw.on { background: var(--accent); }
 .sw.on::after { left: 18px; background: #fff; }
 
+/* ── Recognition model choice ── */
+.stt-choice { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
+.stt-opt {
+  display: flex; align-items: flex-start; gap: 10px;
+  padding: 10px 12px; border: 1px solid var(--border);
+  border-radius: calc(var(--radius) * 1.5); cursor: pointer;
+}
+.stt-opt:hover { border-color: var(--accent-bd); }
+.stt-opt.on { border-color: var(--accent); cursor: default; }
+.stt-opt-dot {
+  width: 14px; height: 14px; margin-top: 3px; flex-shrink: 0;
+  border-radius: 50%; border: 2px solid var(--muted-fg);
+}
+.stt-opt.on .stt-opt-dot { border-color: var(--accent); background: var(--accent); box-shadow: inset 0 0 0 3px var(--card); }
+
 /* ── Pill button groups (size / theme / font / format) ── */
 .size-group, .theme-group, .font-group, .fmt-group { display: flex; flex-wrap: wrap; gap: 4px; }
 .btn-link-icon { display: inline-flex; align-items: center; gap: 6px; text-decoration: none; }
@@ -574,6 +589,16 @@ input[type="range"] { font-family: var(--font-body); font-size: 13px; }
             </div>
             <div id="sttProgressText" class="assistive-text help"></div>
           </div>
+          <div class="row" style="align-items:flex-start;gap:16px">
+            <div style="flex:1">
+              <div class="row-lbl">Recognition model</div>
+              <div class="row-sub row-sub-tight">Applies to new transcriptions. Existing transcripts are left as they are.</div>
+              <div id="sttModelChoice" class="stt-choice"></div>
+              <div class="row-sub row-sub-tight" id="sttModelBusy" style="display:none">Downloading — this continues in the background and takes a few minutes.</div>
+            </div>
+          </div>
+        </div>
+        <div class="card">
           <div class="row" style="align-items:flex-start;gap:16px">
             <div style="flex:1">
               <div class="row-lbl">Play a sound when transcription finishes</div>
@@ -1111,6 +1136,69 @@ function updateTxCompleteVolLabel(v) {
   if (el) el.textContent = v + '%';
 }
 
+// Short reason to pick each engine. The registry name says what a model is;
+// this says when you would want it.
+const STT_MODEL_BLURBS = {
+  'whisperx-large-v3': 'Best on a graphics card. Asks you to confirm the language when it is unsure.',
+  'mlx-whisper-large-v3': 'Metal-accelerated. Asks you to confirm the language when it is unsure.',
+  'parakeet-tdt-0.6b-v3': 'Much faster without a graphics card, and lighter on memory. Detects the language itself — 25 European languages, including Russian and Ukrainian. No language prompt.',
+};
+
+function renderSttChoice() {
+  const host = document.getElementById('sttModelChoice');
+  if (!host) return;
+  const current = settings.stt_model_id || 'whisperx-large-v3';
+  const models = (settings.models || []).filter(m => m.function === 'stt');
+  host.innerHTML = '';
+  models.forEach(m => {
+    const ready = m.status === 'ready';
+    const on = m.id === current;
+    const row = document.createElement('div');
+    row.className = 'stt-opt' + (on ? ' on' : '');
+    const gb = m.size_bytes ? (m.size_bytes / 1e9).toFixed(1) + ' GB' : '';
+    row.innerHTML =
+      '<div class="stt-opt-dot"></div>' +
+      '<div style="flex:1">' +
+        '<div class="row-lbl">' + m.name + '</div>' +
+        '<div class="row-sub row-sub-tight">' + (STT_MODEL_BLURBS[m.id] || '') +
+          (ready ? '' : ' <b>Not downloaded — ' + gb + '. Click to download.</b>') +
+        '</div>' +
+      '</div>';
+    // The selected model still needs a handler when its weights are missing:
+    // that is exactly the state a half-finished setup leaves behind, and
+    // without this there is no way out of it from the page.
+    if (!on || !ready) row.onclick = () => chooseSttModel(m.id, ready);
+    host.appendChild(row);
+  });
+}
+
+async function chooseSttModel(modelId, ready) {
+  const busy = document.getElementById('sttModelBusy');
+  try {
+    if (!ready) {
+      // Save only after the weights are on disk: a selected-but-missing model
+      // would fail at transcribe time, long after the user left this page.
+      if (busy) busy.style.display = '';
+      const res = await fetch(API + '/stt-model/install', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model_id: modelId }),
+      });
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'Download failed');
+    }
+    await patchSetting('stt_model_id', modelId, 'sec-stt');
+    settings.stt_model_id = modelId;
+    const m = (settings.models || []).find(x => x.id === modelId);
+    if (m) m.status = 'ready';
+    document.getElementById('sttCurrentModel').textContent = m ? m.name : modelId;
+    renderSttChoice();
+  } catch (e) {
+    toast('Failed: ' + e.message);
+  } finally {
+    if (busy) busy.style.display = 'none';
+  }
+}
+
 async function saveTxCompleteVol(v) {
   const iv = Math.max(0, Math.min(100, parseInt(v, 10) || 0));
   try {
@@ -1187,6 +1275,7 @@ async function saveExportPromptRecording() {
 const STT_MODEL_NOTES = {
   'whisperx-large-v3': 'Runs on the GPU · 6.5 GB VRAM · you can set the language yourself',
   'mlx-whisper-large-v3': 'Runs on the Neural Engine · you can set the language yourself',
+  'parakeet-tdt-0.6b-v3': 'Needs no graphics card · 25 European languages · detects the language itself, so it never asks',
 };
 
 let _sttSocket = null;

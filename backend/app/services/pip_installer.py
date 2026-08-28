@@ -64,6 +64,21 @@ else:
 # uses the model it belongs to is not blocked on a package it does not need.
 MODEL_OPTIONAL_PACKAGES = {
     'gliner-pii': [('gliner', 'gliner', 'PII detection')],
+    # Parakeet's runtime, and the reason it is the one engine both platforms can
+    # run: onnxruntime needs neither torch nor Metal.
+    #
+    # The wheel differs by platform and the difference is not cosmetic. There is
+    # no ``onnxruntime-gpu`` for macOS at all — asking for it there fails the
+    # install outright — while the plain wheel carries the CoreML provider that
+    # the Mac path depends on. On Windows/Linux ``onnxruntime-gpu`` brings its
+    # own CUDA and cuDNN; loading those beside torch is deliberate, they are
+    # separate runtimes and share no state.
+    'parakeet-tdt-0.6b-v3': [
+        ('onnx_asr', 'onnx-asr[hub]', 'Parakeet speech recognition'),
+        ('onnxruntime',
+         'onnxruntime' if IS_MAC else 'onnxruntime-gpu[cuda,cudnn]',
+         'ONNX Runtime'),
+    ],
 }
 
 def _is_package_installed(import_name):

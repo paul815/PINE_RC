@@ -440,6 +440,11 @@ class MLPipeline:
             diarize.start()
 
         try:
+            # The single-file path hands over the recording untouched. Stated
+            # rather than assumed: the engine is cached across jobs, and a
+            # multitrack job before this one leaves the flag set.
+            self._engine.presegmented = False
+            self._engine.presegmented_regions = None
             out = self._engine.transcribe(
                 job.audio_path, total_duration, forced_lang, ctx)
             total_duration = out.duration_seconds

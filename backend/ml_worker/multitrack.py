@@ -252,11 +252,21 @@ def run_multitrack(engine, specs, language, events, work_dir=None):
                  sum(p['speech_secs'] for p in prepared), len(prepared),
                  len(specs))
 
+        # Every track handed over below has had its silence removed and its
+        # turns spliced together. An engine with its own VAD has to know that:
+        # at single-file settings the splice gap is too short to register, and
+        # it will run one turn into another recorded minutes apart.
+        engine.presegmented = True
+
         for slot, item in enumerate(prepared):
             events.check_cancel()
             raw_id = RAW_SPEAKER.format(item['index'])
             label = item['label']
             speech_secs = item['speech_secs']
+
+            # The exact cuts for this track, so an engine that would otherwise
+            # run its own VAD does not have to guess them back.
+            engine.presegmented_regions = item['splices']
 
             t0 = time.monotonic()
             ctx = TranscribeContext(
