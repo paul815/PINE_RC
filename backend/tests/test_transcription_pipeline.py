@@ -1344,6 +1344,108 @@ class TestAlignModelFailureCaching:
         assert ('ru', 'cpu') not in eng._failed_align_keys
 
 
+class TestAlignModelParking:
+    """The cached align model waits in RAM while Whisper decodes.
+
+    Measured 2026-11-18 on a 12 GB card: an 88-min recording's first chunk
+    decoded in 101s, and the next two — with the ~1.4 GB align model still on
+    the card — took 851s and 836s while Windows paged VRAM to system memory.
+    """
+
+    class FakeAlignModel:
+        def __init__(self, device):
+            self.device = device
+            self.moves = []
+
+        def to(self, device):
+            self.device = str(device)
+            self.moves.append(self.device)
+            return self
+
+    @classmethod
+    def _harness(cls, device):
+        """Engine on `device` plus a fake whisperx that records where the align model sits."""
+        from ml_worker.engines.whisperx_engine import WhisperXEngine
+
+        eng = WhisperXEngine(env=None)
+        eng._device = device
+        seen = {'decode': [], 'align': []}
+
+        def where():
+            model = eng._cached_align_model
+            return None if model is None else model.device
+
+        class FakeWhisperModel:
+            @staticmethod
+            def transcribe(audio, **kwargs):
+                seen['decode'].append(where())
+                return {'segments': [{'start': 1.0, 'end': 2.0, 'text': 'привет'}],
+                        'language': 'ru'}
+
+        eng._model = FakeWhisperModel()
+
+        class FakeAudio:
+            shape = (16000 * 60,)
+
+        class FakeWhisperX:
+            @staticmethod
+            def load_audio(path):
+                return FakeAudio()
+
+            @staticmethod
+            def load_align_model(language_code, device, model_name=None):
+                return cls.FakeAlignModel(device), {'language': language_code}
+
+            @staticmethod
+            def align(segments, model, metadata, audio, device, return_char_alignments=False):
+                seen['align'].append(model.device)
+                return {'segments': segments}
+
+        fake_torch = MagicMock()
+        patches = [
+            patch.dict('sys.modules', {'whisperx': FakeWhisperX, 'torch': fake_torch}),
+            patch('ml_worker.engines.whisperx_engine.free_vram_gb', return_value=8.0),
+            patch('ml_worker.engines.whisperx_engine.load_audio_range',
+                  return_value=FakeAudio()),
+        ]
+        return eng, seen, patches
+
+    def test_chunked_decode_runs_with_align_model_in_ram(self):
+        from ml_worker.engines.base import TranscribeContext
+
+        eng, seen, patches = self._harness('cuda')
+        with patches[0], patches[1], patches[2]:
+            eng.transcribe('rec.wav', 2000, None, TranscribeContext())
+
+        # Chunk 1 decodes before the align model exists; chunk 2 must not share the card with it.
+        assert seen['decode'] == [None, 'cpu']
+        assert seen['align'] == ['cuda', 'cuda']
+        # Parked again afterwards, so diarization and the next job get the memory too.
+        assert eng._cached_align_model.device == 'cpu'
+
+    def test_next_recording_decodes_with_align_model_in_ram(self):
+        from ml_worker.engines.base import TranscribeContext
+
+        eng, seen, patches = self._harness('cuda')
+        with patches[0], patches[1], patches[2]:
+            eng.transcribe('first.wav', 60, None, TranscribeContext())
+            eng.transcribe('second.wav', 60, None, TranscribeContext())
+
+        assert seen['decode'] == [None, 'cpu']
+        assert seen['align'] == ['cuda', 'cuda']
+        assert eng._cached_align_model.device == 'cpu'
+
+    def test_cpu_engine_never_moves_the_align_model(self):
+        from ml_worker.engines.base import TranscribeContext
+
+        eng, seen, patches = self._harness('cpu')
+        with patches[0], patches[1], patches[2]:
+            eng.transcribe('rec.wav', 2000, None, TranscribeContext())
+
+        assert seen['align'] == ['cpu', 'cpu']
+        assert eng._cached_align_model.moves == []
+
+
 # ---------------------------------------------------------------------------
 # 4. Cancellation
 # ---------------------------------------------------------------------------

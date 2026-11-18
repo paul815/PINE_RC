@@ -178,7 +178,8 @@ class WhisperXEngine(EngineAdapter):
         self._model_dir = None
         self._device = None
         self._compute_type = None
-        # Wav2Vec2 align model (reused across recordings; cleared on lang/device change)
+        # Wav2Vec2 align model (reused across recordings; cleared on lang/device change).
+        # On CUDA it waits in RAM between alignments — see _park_align_model.
         self._cached_align_model = None
         self._cached_align_metadata = None
         self._cached_align_language = None
@@ -229,6 +230,8 @@ class WhisperXEngine(EngineAdapter):
         if (self._cached_align_model is not None
                 and self._cached_align_language == language_code
                 and self._cached_align_device == device):
+            if device == 'cuda':
+                self._cached_align_model.to(device)  # back from RAM, see _park_align_model
             return self._cached_align_model, self._cached_align_metadata
         if self._cached_align_model is not None:
             try:
@@ -276,26 +279,28 @@ class WhisperXEngine(EngineAdapter):
         self._cached_align_device = device
         return model_a, metadata
 
-    # Below this the align model's ~1.2 GB costs more than the ~4s reload it saves:
-    # the next chunk's decode would page instead of getting the memory.
-    ALIGN_KEEP_FREE_GB = 1.5
+    def _park_align_model(self, label='align park'):
+        """Move the cached align model to RAM until the next alignment needs it.
 
-    def _release_align_model_if_starved(self):
-        """Give the cached align model back when the card has nothing left."""
-        if self._cached_align_model is None:
+        Left on the card it shares 12 GB with Whisper, pyannote and the Windows
+        desktop. Measured 2026-11-18 on an 88-min recording: chunk 1, decoded
+        before the align model existed, took 101s; chunks 2 and 3, decoded with
+        its ~1.4 GB resident, took 851s and 836s — 10-12 min of that before the
+        first batch — while the worker spilled into shared memory through WDDM.
+        Re-run with parking under the same pressure (chunk 1 at 7.1 GB free):
+        134s and 86s, transcript identical word for word. Each move costs
+        0.5-0.7s. Dropping the model instead would mean a
+        reload per chunk, each one reopening the Hugging Face network window
+        and risking a transient failure that disables alignment for the rest
+        of the worker's life (_failed_align_keys).
+        """
+        if self._device != 'cuda' or self._cached_align_model is None:
             return
-        free_gb = free_vram_gb()
-        if free_gb is None or free_gb >= self.ALIGN_KEEP_FREE_GB:
-            return
-        log.info('Only %.1f GB VRAM free — releasing the cached align model',
-                 free_gb)
-        self._cached_align_model = None
-        self._cached_align_metadata = None
-        self._cached_align_language = None
-        self._cached_align_device = None
-        gc.collect()
-        import torch
-        torch.cuda.empty_cache()
+        with _perf(label):
+            self._cached_align_model.to('cpu')
+            gc.collect()
+            import torch
+            torch.cuda.empty_cache()
 
     # ── decoding ──
 
@@ -417,6 +422,8 @@ class WhisperXEngine(EngineAdapter):
                         'Alignment failed for chunk %d (lang=%s): %s - '
                         'skipping alignment for remaining chunks',
                         i, detected_lang, exc)
+                finally:
+                    self._park_align_model(f'chunk {i + 1} align park')
 
             # Ownership boundaries — each chunk keeps segments whose midpoint
             # falls inside its exclusive zone, eliminating overlap duplicates.
@@ -440,7 +447,6 @@ class WhisperXEngine(EngineAdapter):
             if self._device == 'cuda':
                 import torch
                 torch.cuda.empty_cache()
-                self._release_align_model_if_starved()
             ctx.check_cancel()
 
         all_segments.sort(key=lambda s: s.get('start', 0))
@@ -494,6 +500,8 @@ class WhisperXEngine(EngineAdapter):
                         self._device, return_char_alignments=False)
             except Exception as exc:
                 log.warning('Alignment failed for lang=%s: %s - skipping', detected_lang, exc)
+            finally:
+                self._park_align_model()
 
         return TranscribeOutput(
             segments=result.get('segments', []),
