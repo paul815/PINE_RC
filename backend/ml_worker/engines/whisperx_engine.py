@@ -9,6 +9,7 @@ import contextlib
 import gc
 import logging
 import os
+import subprocess
 import threading
 import time
 
@@ -85,6 +86,43 @@ def free_vram_gb():
         return torch.cuda.mem_get_info()[0] / (1024 ** 3)
     except Exception:      # noqa: BLE001 — diagnostics must never break a job
         return None
+
+
+def parse_nvidia_smi_free_gb(output, uuid):
+    """Free GB of the card whose UUID ends with `uuid`, from `uuid,used,total` CSV in MiB."""
+    want = str(uuid).strip().lower()
+    for line in output.splitlines():
+        parts = [p.strip() for p in line.split(',')]
+        if len(parts) != 3 or not want or not parts[0].lower().endswith(want):
+            continue
+        try:
+            return (float(parts[2]) - float(parts[1])) / 1024
+        except ValueError:
+            return None
+    return None
+
+
+def driver_free_vram_gb():
+    """Free VRAM as the driver counts it, or None when nvidia-smi cannot say.
+
+    Under Windows WDDM, torch's mem_get_info reports this process's budget, not
+    what the card has left: on 2026-11-18 it read 7.1 GB free while nvidia-smi
+    showed 7081 of 12282 MiB used — 5.1 GB. The card is matched by UUID, so
+    CUDA_VISIBLE_DEVICES reordering cannot point this at another GPU.
+    """
+    try:
+        import torch
+        if not torch.cuda.is_available():
+            return None
+        uuid = torch.cuda.get_device_properties(torch.cuda.current_device()).uuid
+        kwargs = {'creationflags': subprocess.CREATE_NO_WINDOW} if os.name == 'nt' else {}
+        out = subprocess.run(
+            ['nvidia-smi', '--query-gpu=uuid,memory.used,memory.total',
+             '--format=csv,noheader,nounits'],
+            capture_output=True, text=True, timeout=5, check=True, **kwargs).stdout
+    except Exception:      # noqa: BLE001 — diagnostics must never break a job
+        return None
+    return parse_nvidia_smi_free_gb(out, uuid)
 
 
 def detect_torch_device():
@@ -304,24 +342,36 @@ class WhisperXEngine(EngineAdapter):
 
     # ── decoding ──
 
+    # Decode working set on top of the loaded model, measured 2026-11-18 on one
+    # 30-min chunk (large-v3, float16, ru, 12 GB card): batch 4 — 1.6 GB in
+    # 42.7s, 8 — 3.5 GB in 33.3s, 16 — 5.9 GB in 30.2s. Each threshold adds 1 GB
+    # for the desktop, which draws on the same card. Missing by even a little
+    # is not 10% slower but 3-25x: the 88-min recording took 299s at batch 8
+    # and 700s at 16 under the same load, the text differing in 16 of 11868
+    # words either way.
+    BATCH_SIZE_BY_FREE_GB = ((7.0, 16), (4.5, 8), (2.6, 4))
+
     def _pick_batch_size(self):
         """Start from the batch the free VRAM actually supports.
 
-        A fixed 16 is only safe with room to spare: on Windows an overcommit
-        does not raise OOM, it pages, and the halving path below never runs.
+        On Windows an overcommit does not raise OOM, it pages, and the halving
+        path below never runs — so the batch has to fit up front, judged by
+        what the driver reports rather than torch's inflated budget.
         """
         if self._device != 'cuda':
             return 4
-        free_gb = free_vram_gb()
+        free_gb, source = driver_free_vram_gb(), 'driver'
+        if free_gb is None:
+            free_gb, source = free_vram_gb(), 'torch'
         if free_gb is None:
             return 16
-        for needed, size in ((4.0, 16), (2.5, 8), (1.5, 4)):
+        for needed, size in self.BATCH_SIZE_BY_FREE_GB:
             if free_gb >= needed:
-                if size < 16:
-                    log.info('Decoding with batch_size=%d (%.1f GB VRAM free)',
-                             size, free_gb)
+                log.info('Decoding with batch_size=%d (%.1f GB VRAM free per %s)',
+                         size, free_gb, source)
                 return size
-        log.warning('Only %.1f GB VRAM free — decoding with batch_size=2', free_gb)
+        log.warning('Only %.1f GB VRAM free (per %s) — decoding with batch_size=2',
+                    free_gb, source)
         return 2
 
     def _transcribe_with_oom_retry(self, audio, language=None):

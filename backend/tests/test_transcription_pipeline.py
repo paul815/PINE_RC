@@ -1404,7 +1404,9 @@ class TestAlignModelParking:
         fake_torch = MagicMock()
         patches = [
             patch.dict('sys.modules', {'whisperx': FakeWhisperX, 'torch': fake_torch}),
-            patch('ml_worker.engines.whisperx_engine.free_vram_gb', return_value=8.0),
+            patch.multiple('ml_worker.engines.whisperx_engine',
+                           free_vram_gb=MagicMock(return_value=8.0),
+                           driver_free_vram_gb=MagicMock(return_value=None)),
             patch('ml_worker.engines.whisperx_engine.load_audio_range',
                   return_value=FakeAudio()),
         ]
@@ -1444,6 +1446,78 @@ class TestAlignModelParking:
 
         assert seen['align'] == ['cpu', 'cpu']
         assert eng._cached_align_model.moves == []
+
+
+class TestDecodeBatchSize:
+    """Whisper's batch comes from the VRAM the driver says is free, not torch's figure.
+
+    Measured 2026-11-18 on a 12 GB card under WDDM: torch reported 7.1 GB free while
+    nvidia-smi showed 5.1 GB; batch 16 needs 5.9 GB on top of the model, so it paged
+    and a 30-min chunk took 275-851s instead of ~30s.
+    """
+
+    @staticmethod
+    def _engine(device='cuda'):
+        from ml_worker.engines.whisperx_engine import WhisperXEngine
+        eng = WhisperXEngine(env=None)
+        eng._device = device
+        return eng
+
+    def test_driver_figure_wins_over_torch(self):
+        eng = self._engine()
+        with patch('ml_worker.engines.whisperx_engine.driver_free_vram_gb', return_value=5.1), \
+                patch('ml_worker.engines.whisperx_engine.free_vram_gb', return_value=7.1):
+            assert eng._pick_batch_size() == 8
+
+    @pytest.mark.parametrize('free_gb, batch', [
+        (11.0, 16), (7.0, 16), (6.9, 8), (4.5, 8), (4.4, 4), (2.6, 4), (2.5, 2), (0.3, 2),
+    ])
+    def test_batch_leaves_a_gigabyte_beside_the_decode(self, free_gb, batch):
+        eng = self._engine()
+        with patch('ml_worker.engines.whisperx_engine.driver_free_vram_gb', return_value=free_gb), \
+                patch('ml_worker.engines.whisperx_engine.free_vram_gb', return_value=99.0):
+            assert eng._pick_batch_size() == batch
+
+    def test_torch_figure_is_the_fallback(self):
+        eng = self._engine()
+        with patch('ml_worker.engines.whisperx_engine.driver_free_vram_gb', return_value=None), \
+                patch('ml_worker.engines.whisperx_engine.free_vram_gb', return_value=5.0):
+            assert eng._pick_batch_size() == 8
+
+    def test_cpu_never_asks_the_driver(self):
+        eng = self._engine('cpu')
+        with patch('ml_worker.engines.whisperx_engine.driver_free_vram_gb') as driver:
+            assert eng._pick_batch_size() == 4
+        driver.assert_not_called()
+
+
+class TestDriverFreeVram:
+    """nvidia-smi parsing — matched by UUID, so CUDA_VISIBLE_DEVICES cannot mix up cards."""
+
+    SMI = ('GPU-11111111-2222-3333-4444-555555555555, 900, 24576\n'
+           'GPU-abe9dd30-4cd2-5141-6d8d-11799b512f55, 7081, 12282\n')
+
+    def test_reads_the_card_torch_is_using(self):
+        from ml_worker.engines.whisperx_engine import parse_nvidia_smi_free_gb
+        free = parse_nvidia_smi_free_gb(self.SMI, 'abe9dd30-4cd2-5141-6d8d-11799b512f55')
+        assert free == pytest.approx((12282 - 7081) / 1024)
+
+    def test_unknown_card_or_garbage_gives_none(self):
+        from ml_worker.engines.whisperx_engine import parse_nvidia_smi_free_gb
+        assert parse_nvidia_smi_free_gb(self.SMI, 'deadbeef-0000-0000-0000-000000000000') is None
+        assert parse_nvidia_smi_free_gb('NVIDIA-SMI has failed\n', 'abe9dd30') is None
+        assert parse_nvidia_smi_free_gb('GPU-abe9dd30, [N/A], 12282\n', 'abe9dd30') is None
+
+    def test_missing_nvidia_smi_gives_none(self):
+        from ml_worker.engines.whisperx_engine import driver_free_vram_gb
+
+        fake_torch = MagicMock()
+        fake_torch.cuda.is_available.return_value = True
+        fake_torch.cuda.get_device_properties.return_value.uuid = 'abe9dd30'
+        with patch.dict('sys.modules', {'torch': fake_torch}), \
+                patch('ml_worker.engines.whisperx_engine.subprocess.run',
+                      side_effect=FileNotFoundError('nvidia-smi')):
+            assert driver_free_vram_gb() is None
 
 
 # ---------------------------------------------------------------------------
