@@ -10,6 +10,9 @@
 <style>html{font-size:{{ init_font_size }}px !important;}</style>
 <link rel="stylesheet" href="{{ url_for('static', filename='css/fonts.css') }}" />
 <link rel="stylesheet" href="{{ url_for('static', filename='css/tokens.css') }}" />
+<link rel="stylesheet" href="{{ url_for('static', filename='css/button-system.css') }}" />
+<link rel="stylesheet" href="{{ url_for('static', filename='css/ui-system.css') }}" />
+<link rel="stylesheet" href="{{ url_for('static', filename='css/save-status.css') }}" />
 <script src="{{ url_for('static', filename='js/theme.js') }}"
         data-theme="{{ init_theme }}"
         data-font-size="{{ init_font_size }}"
@@ -46,35 +49,22 @@ body { font-size: inherit; }
 
 .shell { display: flex; flex-direction: column; height: 100vh; }
 
-/* ── Top bar ── */
-.top-bar {
-  height: 48px; flex-shrink: 0; background: var(--card);
-  border-bottom: 1px solid var(--border);
-  display: flex; align-items: center; gap: 0; padding: 0 16px; z-index: var(--z-sticky);
-}
-.tb-logo { display: flex; align-items: center; gap: 8px; flex-shrink: 0;
-  text-decoration: none; color: inherit; min-height: var(--btn-h-md, 34px);
-  padding: 0 8px; margin: 0 -8px; border-radius: var(--radius); transition: background .15s; }
-.tb-logo:hover { background: var(--muted); }
-.tb-logo-icon { width: 18px; height: 18px; object-fit: contain; border-radius: var(--radius-sm); flex-shrink: 0; }
-.tb-name { font-size: 1rem; font-weight: 700; letter-spacing: 0.14em; color: var(--fg); line-height: 1; }
-.tb-sep { width: 1px; height: 18px; background: var(--border); margin: 0 14px; }
-.tb-sub { font-size: 0.846rem; color: var(--muted-fg); letter-spacing: 0.04em; }
+/* Top bar (.top-bar, .tb-*): css/ui-system.css §6. */
 .tb-right { margin-left: auto; display: flex; align-items: center; gap: 8px; }
 
 /* ── Content ── */
-.content { flex: 1; overflow-y: auto; padding: 28px; background: var(--sunken); }
+.content { flex: 1; overflow-y: auto; padding: 24px; background: var(--sunken); }
 .content-inner { max-width: 640px; margin: 0 auto; }
 
 /* ── Sections ── */
-.section { margin-bottom: 28px; }
+.section { margin-bottom: 24px; }
 .sec-title {
   font-size: 1.077rem; font-weight: 600; color: var(--fg); margin-bottom: 12px;
 }
 .card {
   background: var(--card); border: 1px solid var(--border);
   border-radius: calc(var(--radius) * 2);
-  padding: 16px 18px; margin-bottom: 8px;
+  padding: 16px 20px; margin-bottom: 8px;
 }
 
 /* ── Rows ── */
@@ -120,18 +110,18 @@ body { font-size: inherit; }
 
 .assistive-text.help {
   margin-top: 4px;
-  line-height: 1.45;
+  line-height: 1.5;
 }
 
 .backup-about {
-  margin-bottom: 14px;
-  padding: 12px 14px;
+  margin-bottom: 16px;
+  padding: 12px 16px;
   background: var(--muted);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   font-size: 0.923rem;
   color: var(--muted-fg);
-  line-height: 1.55;
+  line-height: 1.5;
 }
 
 .backup-about p { margin: 0; }
@@ -139,22 +129,15 @@ body { font-size: inherit; }
 .backup-about strong { color: var(--fg); font-weight: 600; }
 
 
-/* ── Toggle switch ── */
-.sw {
-  width: 36px; height: 20px; border-radius: var(--radius-pill); background: var(--secondary); cursor: pointer;
-  position: relative; transition: background 0.2s; flex-shrink: 0;
-}
-.sw::after {
-  content: ''; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px;
-  border-radius: 50%; background: var(--muted-fg); transition: all 0.2s;
-}
-.sw.on { background: var(--accent); }
-.sw.on::after { left: 18px; background: #fff; }
+/* Toggle switch (.sw): css/ui-system.css §7. */
 
 /* ── Pill button groups (size / theme / font / format) ── */
 .size-group, .theme-group, .font-group, .fmt-group { display: flex; flex-wrap: wrap; gap: 4px; }
-.btn-link-icon { display: inline-flex; align-items: center; gap: 6px; text-decoration: none; }
-.btn-link-icon svg { width: 14px; height: 14px; flex-shrink: 0; }
+/* Gap and icon size come from the button base in button-system.css. */
+.btn-link-icon { display: inline-flex; align-items: center; text-decoration: none; }
+.btn-link-icon svg { flex-shrink: 0; }
+/* Each font button previews its own face. These lost to the button base's
+   font-family while the shared sheets loaded after this block. */
 .font-preview-system { font-family: system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif; }
 .font-preview-inter { font-family: 'Inter',sans-serif; }
 .font-preview-source-sans-3 { font-family: 'Source Sans 3',sans-serif; }
@@ -167,8 +150,8 @@ input[type="range"] { font-size: 1rem; }
 
 /* ── Disk bar ── */
 .disk-row { margin-top: 8px; }
-.disk-bar { height: 6px; border-radius: 3px; background: var(--secondary); overflow: hidden; margin-top: 6px; }
-.disk-fill { height: 100%; border-radius: 3px; background: var(--accent); transition: width 0.3s; }
+.disk-bar { height: 6px; border-radius: var(--radius-pill); background: var(--secondary); overflow: hidden; margin-top: 6px; }
+.disk-fill { height: 100%; border-radius: var(--radius-pill); background: var(--accent); transition: width 0.3s; }
 .disk-lbl { font-size: 0.846rem; color: var(--muted-fg); font-family: var(--font-mono); margin-top: 4px; }
 
 /* ── Textarea ── */
@@ -176,7 +159,7 @@ input[type="range"] { font-size: 1rem; }
   width: 100%; background: var(--muted); border: 1px solid var(--border);
   border-radius: var(--radius);
   padding: 8px 10px; font-size: 1rem; color: var(--fg);
-  font-family: var(--font-mono); line-height: 1.55;
+  font-family: var(--font-mono); line-height: 1.5;
   outline: none; transition: border-color 0.15s; resize: vertical; min-height: 130px;
   margin-top: 8px;
 }
@@ -187,7 +170,7 @@ input[type="range"] { font-size: 1rem; }
 .token-display {
   font-size: 1rem; color: var(--muted-fg); font-family: var(--font-mono);
   background: var(--muted); border: 1px solid var(--border); border-radius: var(--radius);
-  padding: 7px 10px; margin-top: 8px;
+  padding: 8px 10px; margin-top: 8px;
 }
 .token-ok { color: var(--accent); font-size: 0.923rem; margin-left: 8px; }
 .token-err { color: var(--destr); font-size: 0.923rem; margin-left: 8px; }
@@ -242,19 +225,17 @@ input[type="range"] { font-size: 1rem; }
   border-radius: 50%;
   background: var(--accent);
   transform: translate(-50%, -50%) scale(0);
-  transition: transform .12s ease-out;
+  transition: transform .15s ease;
 }
 .radio-group input[type="radio"]:checked { border-color: var(--accent); }
 .radio-group input[type="radio"]:checked::before { transform: translate(-50%, -50%) scale(1); }
+/* DESIGN.md: a focus ring is a box-shadow, never an outline. */
 .radio-group input[type="radio"]:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
+  outline: none;
+  box-shadow: var(--btn-focus-ring);
 }
 </style>
 <script src="{{ url_for('static', filename='js/save-status.js') }}"></script>
-<link rel="stylesheet" href="{{ url_for('static', filename='css/button-system.css') }}" />
-<link rel="stylesheet" href="{{ url_for('static', filename='css/ui-system.css') }}" />
-<link rel="stylesheet" href="{{ url_for('static', filename='css/save-status.css') }}" />
 </head>
 <body>
 

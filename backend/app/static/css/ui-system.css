@@ -32,10 +32,11 @@ button {
    that were in use (2px 4px … 10px 12px). */
 .field {
   width: 100%;
+  min-height: var(--h-field);
   box-sizing: border-box;
-  padding: 7px 10px;
+  padding: var(--space-8) var(--space-10);
   font-size: 1rem;
-  line-height: 1.4;
+  line-height: var(--lh-ui);
   color: var(--fg);
   background: var(--card);
   border: 1px solid var(--border);
@@ -50,6 +51,16 @@ button {
   border-color: var(--accent);
 }
 
+/* Every text field shows the standard focus ring on top of its border colour,
+   so a keyboard user can see where they are on every screen — including the
+   page-local inputs on onboarding and tags that are not .field.
+   :where() keeps this at the specificity of :focus-visible alone, so a
+   component that draws its own indicator (the segment stepper, say) can turn
+   it off with a plain class rule. */
+:where(input:not([type="checkbox"], [type="radio"], [type="range"]), textarea, select):focus-visible {
+  box-shadow: var(--btn-focus-ring);
+}
+
 .field::placeholder {
   color: var(--muted-fg);
 }
@@ -61,7 +72,8 @@ button {
 
 /* Compact variant — inline fields inside popovers and toolbars. */
 .field-sm {
-  padding: 4px 7px;
+  min-height: var(--h-field-sm);
+  padding: var(--space-4) var(--space-8);
   font-size: 0.846rem;
   border-radius: var(--radius-sm);
 }
@@ -73,7 +85,7 @@ button {
 
 textarea.field {
   resize: vertical;
-  line-height: 1.55;
+  line-height: var(--lh-ui);
 }
 
 /* Native select chrome differs per OS and looked nothing like the rest of
@@ -83,7 +95,7 @@ select.field {
   -webkit-appearance: none;
   -moz-appearance: none;
   cursor: pointer;
-  padding-right: 30px;
+  padding-right: var(--space-32);
   background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 10' fill='none'%3E%3Cpath d='M2 3.5l3 3 3-3' stroke='%23888' stroke-width='1.3' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
   background-repeat: no-repeat;
   background-position: right 10px center;
@@ -91,7 +103,7 @@ select.field {
 }
 
 select.field-sm {
-  padding-right: 24px;
+  padding-right: var(--space-24);
   background-position: right 7px center;
   background-size: 9px 9px;
 }
@@ -109,7 +121,7 @@ select.field-sm {
   font-family: var(--font-body);
   font-size: var(--label-size);
   font-weight: var(--label-weight);
-  line-height: 1.3;
+  line-height: var(--lh-heading);
   letter-spacing: var(--label-tracking);
   text-transform: uppercase;
   color: var(--muted-fg);
@@ -140,7 +152,7 @@ select.field-sm {
   backdrop-filter: blur(4px);
   opacity: 0;
   pointer-events: none;
-  transition: opacity 0.18s ease;
+  transition: opacity 0.15s ease;
 }
 
 .overlay.show {
@@ -151,13 +163,13 @@ select.field-sm {
 .modal {
   width: 380px;
   max-width: 92vw;
-  padding: 24px;
+  padding: var(--space-24);
   background: var(--card);
   border: 1px solid var(--border);
   border-radius: calc(var(--radius) * 2);
   box-shadow: var(--shadow-lg);
   transform: translateY(8px);
-  transition: transform 0.18s ease;
+  transition: transform 0.15s ease;
 }
 
 .overlay.show .modal {
@@ -170,7 +182,7 @@ select.field-sm {
   max-height: 80vh;
   display: flex;
   flex-direction: column;
-  padding: 20px 22px;
+  padding: var(--space-20) var(--space-24);
 }
 
 .modal-body {
@@ -180,29 +192,63 @@ select.field-sm {
 
 /* A list needs more air under its heading than a one-line question does. */
 .modal-wide .modal-title {
-  margin-bottom: 14px;
+  margin-bottom: var(--space-16);
 }
 
 .modal-title {
   font-family: var(--font-body);
   font-size: 1.077rem;
   font-weight: 700;
-  line-height: 1.3;
-  margin-bottom: 6px;
+  line-height: var(--lh-heading);
+  margin-bottom: var(--space-6);
 }
 
 .modal-desc {
   font-size: 1rem;
   color: var(--muted-fg);
-  line-height: 1.55;
-  margin-bottom: 20px;
+  line-height: var(--lh-ui);
+  margin-bottom: var(--space-20);
+}
+
+/* Option rows inside a dialog: a label on the left, a control (switch,
+   format picker) on the right, a hairline between rows. Used by the export
+   dialog on main and recording and by find-and-replace. The two export copies
+   had drifted — 8px vs 10px rows, --fg vs --muted-fg labels; they now match
+   the Export defaults rows in Settings, which offer the same options. */
+.m-sub {
+  margin-bottom: var(--space-16);
+  font-size: 1rem;
+  line-height: var(--lh-ui);
+  color: var(--muted-fg);
+}
+
+.m-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-10) 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.m-lbl {
+  font-size: 1rem;
+  color: var(--fg);
+}
+
+/* A label followed by a "?" hint; the max-width keeps it clear of the switch. */
+.m-lbl-with-hint {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-6);
+  max-width: calc(100% - 44px);
 }
 
 .m-actions {
   display: flex;
-  gap: 8px;
+  gap: var(--space-8);
   justify-content: flex-end;
-  margin-top: 16px;
+  margin-top: var(--space-16);
 }
 
 /* ==========================================================================
@@ -247,8 +293,8 @@ select.field-sm {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 12px;
-  padding: 48px 20px;
+  gap: var(--space-12);
+  padding: var(--space-48) var(--space-20);
   text-align: center;
   color: var(--muted-fg);
 }
@@ -261,7 +307,7 @@ select.field-sm {
 
 .empty-state p {
   font-size: 1rem;
-  line-height: 1.6;
+  line-height: var(--lh-prose);
   max-width: 260px;
   color: var(--muted-fg);
 }
@@ -271,6 +317,168 @@ select.field-sm {
   font-size: 0.923rem;
   font-style: italic;
   color: var(--muted-fg);
-  padding: 16px 0;
+  padding: var(--space-16) 0;
   text-align: center;
+}
+
+/* ==========================================================================
+   6. Top bar
+   --------------------------------------------------------------------------
+   The 48px band across the top of main, recording, tags and settings. Five
+   templates (counting the since-deleted manage_tags) carried their own copy;
+   they agreed on everything but flex-shrink on the separator and the icon,
+   and main's copy had no z-index. One copy now, with both.
+   A page adds what is its own — main's .tb-sep.compact, recording's
+   editable recording name — in its own <style> block, which loads after
+   this sheet.
+   ========================================================================== */
+
+.top-bar {
+  min-height: var(--h-topbar);
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 0;
+  padding: 0 var(--space-16);
+  background: var(--card);
+  border-bottom: 1px solid var(--border);
+  z-index: var(--z-sticky);
+}
+
+/* The logo is a link home: a button-height hit area whose padding is pulled
+   back out by the negative margin, so the mark stays on the 16px gutter. */
+.tb-logo {
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
+  flex-shrink: 0;
+  min-height: var(--btn-h-md);
+  padding: 0 var(--space-8);
+  margin: 0 -8px;
+  border-radius: var(--radius);
+  color: inherit;
+  text-decoration: none;
+  transition: background-color 0.15s ease;
+}
+
+.tb-logo:hover {
+  background: var(--muted);
+}
+
+.tb-logo-icon {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  object-fit: contain;
+  border-radius: var(--radius-sm);
+}
+
+.tb-name {
+  font-size: 1rem;
+  font-weight: 700;
+  line-height: var(--lh-control);
+  letter-spacing: var(--track-wordmark);
+  color: var(--fg);
+}
+
+.tb-sep {
+  width: 1px;
+  height: 18px;
+  flex-shrink: 0;
+  margin: 0 var(--space-16);
+  background: var(--border);
+}
+
+.tb-sub {
+  font-size: 0.846rem;
+  letter-spacing: 0;
+  color: var(--muted-fg);
+}
+
+/* ==========================================================================
+   7. Toggle switch
+   --------------------------------------------------------------------------
+   Was 30×17 with a border in main and recording, 36×20 without one in
+   settings. Settings' size won — the larger target is easier to hit — so the
+   export and find-and-replace switches grew to match.
+   ========================================================================== */
+
+.sw {
+  position: relative;
+  flex-shrink: 0;
+  width: 36px;
+  height: 20px;
+  border-radius: var(--radius-pill);
+  background: var(--secondary);
+  cursor: pointer;
+  transition: background-color 0.15s ease;
+}
+
+.sw::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--muted-fg);
+  transition:
+    left 0.15s ease,
+    background-color 0.15s ease;
+}
+
+.sw.on {
+  background: var(--accent);
+}
+
+.sw.on::after {
+  left: 18px;
+  background: var(--accent-fg);
+}
+
+/* Same dimming as a disabled button. */
+.sw.disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+/* ==========================================================================
+   8. Colour grid
+   --------------------------------------------------------------------------
+   The six-across swatch grid in the code-colour pickers (recording, tags).
+   The gap was 5px in one copy and 6px in the other two.
+   ========================================================================== */
+
+.color-grid {
+  display: grid;
+  grid-template-columns: repeat(6, 22px);
+  gap: var(--space-6);
+}
+
+/* ==========================================================================
+   9. Export options
+   --------------------------------------------------------------------------
+   The format picker and its hint, and the time estimate beside the PII
+   option — identical in main's and recording's export dialogs.
+   ========================================================================== */
+
+.fmt-pick {
+  display: flex;
+  gap: var(--space-4);
+}
+
+/* Sits under the picker; the negative margin tucks it up against it. */
+.fmt-hint {
+  margin-top: -6px;
+  margin-bottom: var(--space-4);
+  font-size: 0.846rem;
+  text-align: right;
+  color: var(--muted-fg);
+}
+
+.pii-export-time {
+  font-weight: 400;
+  color: var(--muted-fg);
 }

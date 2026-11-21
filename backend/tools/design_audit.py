@@ -2,12 +2,25 @@
 """
 design_audit.py — PINE Design Consistency Audit
 
-Parses all Jinja2 templates, extracts CSS rules for heading/section/label
-classes, and reports mismatches in font-size, font-weight, and other
-visual properties across pages.
+Two reports:
+
+1. Typography by role — parses the templates' <style> blocks, extracts CSS
+   rules for heading/section/label classes, and reports mismatches in
+   font-size, font-weight and other type properties across pages.
+
+2. Source-literal compliance (``--rules``) — reads every <style> block in
+   ``templates/`` and every sheet in ``app/static/css/`` and lists, as
+   file:line, each declaration that breaks a rule in documentation/DESIGN.md:
+   spacing off the scale, raw radii / colours / z-index, transition durations
+   other than 0.15s, box-shadows that are neither a token nor a ring, classes
+   defined in more than one template, and bare [data-theme] selectors.
+   ``style="…"`` attributes and JS strings are out of scope.
 
 Run from repo root with the venv active:
-    python backend/tools/design_audit.py
+    python backend/tools/design_audit.py            # both reports
+    python backend/tools/design_audit.py --rules    # compliance only
+
+Exit code is non-zero when the selected report(s) find anything.
 """
 
 import re
@@ -328,11 +341,346 @@ def print_report(data: dict[str, dict[str, dict[str, str] | None]]) -> int:
     return 1 if has_mismatch else 0
 
 
+# ── Source-literal compliance (--rules) ───────────────────────────────────────
+#
+# Static checks on what is *written*, not on what renders: the Playwright tool
+# (design-audit.js) compares computed styles across live pages, which is a
+# different question. Every finding is reported as path:line so it can be
+# fixed in place.
+
+BACKEND_DIR = Path(__file__).parent.parent
+CSS_DIR = BACKEND_DIR / "app" / "static" / "css"
+TOKENS_CSS = CSS_DIR / "tokens.css"
+
+# The spacing scale — documentation/DESIGN.md → Spacing. tokens.css defines the
+# same steps as --space-*; tests/test_design_audit.py fails if the two drift.
+SPACING_SCALE = (2, 4, 6, 8, 10, 12, 16, 20, 24, 32, 40, 48)
+
+# Interactive state changes animate at this duration (DESIGN.md → Buttons).
+INTERACTIVE_DURATION_S = 0.15
+
+# Line heights by job (DESIGN.md → Typography): a single-line control, a
+# heading, UI text, long-form reading. tokens.css names them --lh-*.
+LINE_HEIGHTS = ('1', '1.3', '1.5', '1.65', 'normal', 'inherit')
+
+# Tracking: none by default; uppercase micro-labels and the PINE wordmark only.
+LETTER_SPACINGS = ('0', 'normal', 'inherit', '0.08em', '0.14em',
+                   'var(--label-tracking)', 'var(--track-wordmark)')
+
+_SPACING_PROP = re.compile(
+    r'^(?:(?:padding|margin)(?:-(?:top|right|bottom|left|inline|block)(?:-(?:start|end))?)?'
+    r'|gap|row-gap|column-gap)$'
+)
+_RADIUS_PROP = re.compile(r'^border(?:-[a-z]+)*-radius$')
+_COLOR_LITERAL = re.compile(r'#[0-9a-fA-F]{3,8}\b|\b(?:rgba?|hsla?)\(')
+_PX = re.compile(r'(?<![\w.-])(-?\d*\.?\d+)px\b')
+_TIME = re.compile(r'(?<![\w.-])(\d*\.?\d+)(ms|s)\b')
+_BARE_THEME = re.compile(r'(?:^|[\s>+~(])\[data-theme')
+
+# The only places the rules bend. Key: (path, selector, property). A selector
+# matches the rule's selector text with whitespace collapsed. Every entry says
+# why; an entry without a reason does not belong here.
+EXEMPT: dict[tuple[str, str, str], str] = {
+    ("app/static/css/save-status.css", ".toast", "z-index"):
+        "sits deliberately above --z-toast at a literal 2100 (DESIGN.md → Stacking)",
+    # Non-interactive motion: these animate data or a notification, not a
+    # response to the pointer, so the 0.15s rule does not apply.
+    ("templates/onboarding.html", ".dl-bar", "transition"):
+        "download progress fill — tracks data, not interaction",
+    ("templates/settings.html", ".disk-fill", "transition"):
+        "disk-usage meter fill — tracks data, not interaction",
+    ("app/static/css/save-status.css", ".toast", "transition"):
+        "notification fade — not a response to the pointer",
+    ("app/static/css/save-status.css", ".save-status", "transition"):
+        "status-text fade — not a response to the pointer",
+    # Rest/hover lift pair. Sending either step to a --shadow-* token changes
+    # the lift (--shadow-lg turns 4px into 14px); kept until a hover-lift token
+    # exists.
+    # var() inside a highlight pseudo is not resolved reliably across engines,
+    # so the pending-selection highlight keeps literal colours here; the <mark>
+    # fallback below it uses the page tokens.
+    ("templates/recording.html", "::highlight(pinePendingTagSel)", "background-color"):
+        "::highlight() — var() not reliably resolved in highlight pseudos",
+    ("templates/recording.html", "::highlight(pinePendingTagSel)", "text-shadow"):
+        "::highlight() — var() not reliably resolved in highlight pseudos",
+    ("templates/recording.html", ':root[data-theme="dark"] ::highlight(pinePendingTagSel)', "background-color"):
+        "::highlight() — var() not reliably resolved in highlight pseudos",
+    ("templates/recording.html", ':root[data-theme="dark"] ::highlight(pinePendingTagSel)', "text-shadow"):
+        "::highlight() — var() not reliably resolved in highlight pseudos",
+    ("templates/main.html", ".status-icon", "line-height"):
+        "line-height 0 collapses the icon's box to the glyph, so it centres in its row",
+    ("app/static/css/button-system.css", ".back-to-rec-btn", "box-shadow"):
+        "rest half of the back-to-recording lift pair — no hover-lift token yet",
+    ("app/static/css/button-system.css", ".back-to-rec-btn:hover:not(:disabled)", "box-shadow"):
+        "hover half of the back-to-recording lift pair — no hover-lift token yet",
+}
+
+# Spacing above the scale's top step that is not rhythm. Matched like EXEMPT.
+SPACING_ABOVE_SCALE: dict[tuple[str, str, str], str] = {
+    ("templates/tags.html", ".ins-inner", "padding"):
+        "60px scroll tail under the inspector, so its last field clears the fold",
+}
+
+# One-pixel optical corrections. They nudge a glyph or a rule into place; they
+# are not rhythm, so the spacing scale does not apply to them.
+SPACING_OPTICAL: dict[tuple[str, str, str], str] = {
+    ("templates/recording.html", ".play-btn svg", "margin-left"):
+        "centres the play triangle optically inside its disc",
+    ("templates/onboarding.html", ".notice svg", "margin-top"):
+        "drops the icon onto the first line of the notice text",
+    ("templates/main.html", ".project-name", "padding-bottom"):
+        "hairline between the project title and its edit underline",
+}
+
+# Classes that legitimately carry a definition in more than one template —
+# the same name for a different thing on each page, or a layout kept local on
+# purpose. Anything else defined twice belongs in a shared sheet.
+_LAYOUT = "page layout region — the same name for a different layout on each page"
+KNOWN_DUPLICATES: dict[str, str] = {
+    "body": _LAYOUT,
+    "left": _LAYOUT,
+    "right": _LAYOUT,
+    "left-header": _LAYOUT,
+    "right-header": _LAYOUT,
+    "left-footer": _LAYOUT,
+    "resize-handle": "main's is a 4px column splitter, recording's a 7px row splitter with a grip",
+    "shell": "out of scope (visual-consistency design §7.3): onboarding's shell is a row, the "
+             "others a column; a shared rule would collapse the wizard",
+    "search-wrap": "search field: main's leaves room for a clear button, tags' has none",
+    "search-in": "search field: main's leaves room for a clear button, tags' has none",
+    "field-card": "two components: main's project-detail card and onboarding's settings card",
+    "disk-bar": "two meters: onboarding's 3px inline bar and settings' 6px disk-usage bar",
+    "disk-fill": "two meters: onboarding's 3px inline bar and settings' 6px disk-usage bar",
+}
+
+
+def _norm_selector(sel: str) -> str:
+    return re.sub(r'\s+', ' ', sel).strip()
+
+
+def _blank_comments(css: str) -> str:
+    """Remove /* */ comments but keep every newline, so line numbers hold."""
+    return re.sub(r'/\*.*?\*/', lambda m: re.sub(r'[^\n]', ' ', m.group(0)), css, flags=re.DOTALL)
+
+
+def _rule_sources():
+    """Yield (display_path, full_text, offset_of_css, css) for every sheet."""
+    for path in sorted(TEMPLATES_DIR.glob("*.html")):
+        text = path.read_text(encoding="utf-8")
+        for m in re.finditer(r'<style[^>]*>(.*?)</style>', text, re.DOTALL):
+            if m.group(1).lstrip().startswith('html{font-size'):
+                continue  # the boot line: a Jinja-filled root font size
+            yield f"templates/{path.name}", text, m.start(1), m.group(1)
+    for path in sorted(CSS_DIR.glob("*.css")):
+        text = path.read_text(encoding="utf-8")
+        yield f"app/static/css/{path.name}", text, 0, text
+
+
+def collect_declarations() -> list[dict]:
+    """Every declaration as {path, line, selector, prop, value, keyframes}.
+
+    A small scanner rather than a regex: values carry data: URIs with ';' in
+    them, and @media / @keyframes nest. Quotes and parentheses are respected.
+    """
+    out: list[dict] = []
+    for display, full, offset, raw in _rule_sources():
+        css = _blank_comments(raw)
+        stack: list[str] = []
+        start = 0
+        quote = ''
+        depth = 0
+        for i, ch in enumerate(css):
+            if quote:
+                if ch == quote:
+                    quote = ''
+                continue
+            if ch in '"\'':
+                quote = ch
+            elif ch == '(':
+                depth += 1
+            elif ch == ')':
+                depth = max(0, depth - 1)
+            elif depth:
+                continue
+            elif ch == '{':
+                stack.append(_norm_selector(css[start:i]))
+                start = i + 1
+            elif ch in ';}':
+                chunk = css[start:i]
+                if stack and ':' in chunk and not stack[-1].startswith('@media'):
+                    prop, _, value = chunk.partition(':')
+                    prop = prop.strip().lower()
+                    if re.fullmatch(r'-?-?[a-z][a-z0-9-]*', prop):
+                        lead = len(chunk) - len(chunk.lstrip())
+                        line = full.count('\n', 0, offset + start + lead) + 1
+                        out.append({
+                            'path': display, 'line': line, 'selector': stack[-1],
+                            'prop': prop, 'value': ' '.join(value.split()),
+                            'keyframes': any(s.startswith('@keyframes') for s in stack),
+                        })
+                if ch == '}' and stack:
+                    stack.pop()
+                start = i + 1
+    return out
+
+
+def _strip_functions(value: str, names: tuple[str, ...]) -> str:
+    """Drop every NAME(...) call, nesting included."""
+    pattern = re.compile(r'\b(?:' + '|'.join(names) + r')\(')
+    while True:
+        m = pattern.search(value)
+        if not m:
+            return value
+        depth, j = 0, m.end() - 1
+        for j in range(m.end() - 1, len(value)):
+            if value[j] == '(':
+                depth += 1
+            elif value[j] == ')':
+                depth -= 1
+                if depth == 0:
+                    break
+        value = value[:m.start()] + ' ' + value[j + 1:]
+
+
+def _exempt(table: dict, d: dict, prop: str | None = None) -> bool:
+    return (d['path'], d['selector'], prop or d['prop']) in table
+
+
+def check_rules(decls: list[dict]) -> dict[str, list[tuple[dict, str]]]:
+    """Return {category: [(declaration, message)]}."""
+    found: dict[str, list[tuple[dict, str]]] = {
+        'spacing': [], 'radius': [], 'colour': [], 'z-index': [],
+        'transition': [], 'box-shadow': [], 'line-height': [], 'letter-spacing': [],
+        'theme scope': [],
+    }
+    for d in decls:
+        prop, value, path = d['prop'], d['value'], d['path']
+        if prop.startswith('--') or d['keyframes'] or path.endswith('/fonts.css'):
+            continue
+        is_tokens = path.endswith('/tokens.css')
+
+        if _SPACING_PROP.match(prop) and not _exempt(SPACING_OPTICAL, d):
+            plain = _strip_functions(value, ('var', 'calc', 'min', 'max', 'clamp'))
+            for num in _PX.findall(plain):
+                n = float(num)
+                if n <= 0 or n in SPACING_SCALE:
+                    continue  # 0, and negative offsets, are not rhythm
+                if n > max(SPACING_SCALE) and _exempt(SPACING_ABOVE_SCALE, d):
+                    continue
+                found['spacing'].append((d, f'{num}px is off the scale'))
+
+        if _RADIUS_PROP.match(prop) and not is_tokens:
+            plain = _strip_functions(value, ('var', 'calc'))
+            if any(float(n) != 0 for n in _PX.findall(plain)):
+                found['radius'].append((d, 'raw radius — use --radius-*'))
+
+        if not is_tokens and prop != 'box-shadow' and not _exempt(EXEMPT, d):
+            plain = _strip_functions(value, ('url',))
+            if _COLOR_LITERAL.search(plain):
+                found['colour'].append((d, 'raw colour — use a token'))
+
+        if prop == 'line-height' and not is_tokens and value not in LINE_HEIGHTS \
+                and not value.startswith('var(--lh-') and not _exempt(EXEMPT, d):
+            found['line-height'].append((d, 'use 1, 1.3, 1.5 or 1.65 (--lh-*)'))
+
+        if prop == 'letter-spacing' and not is_tokens and value not in LETTER_SPACINGS:
+            found['letter-spacing'].append((d, 'use 0, --label-tracking or --track-wordmark'))
+
+        if prop == 'z-index' and not value.startswith('var(') and not _exempt(EXEMPT, d):
+            found['z-index'].append((d, 'raw z-index — use the --z-* ladder'))
+
+        if prop in ('transition', 'transition-duration') and not _exempt(EXEMPT, d, 'transition'):
+            for item in value.split(','):
+                times = _TIME.findall(item)
+                if not times:
+                    continue
+                num, unit = times[0]  # the first time is the duration
+                secs = float(num) / (1000 if unit == 'ms' else 1)
+                if secs and abs(secs - INTERACTIVE_DURATION_S) > 1e-9:
+                    found['transition'].append((d, f'{num}{unit} — interactive transitions are 0.15s'))
+                    break
+
+        if prop == 'box-shadow' and not is_tokens and not _exempt(EXEMPT, d):
+            v = value.lower()
+            if not (v in ('none', '0 0 0 0 transparent') or 'var(' in v or 'inset' in v):
+                found['box-shadow'].append((d, 'neither a --shadow-* token nor a ring'))
+
+    seen_selectors = set()
+    for d in decls:
+        key = (d['path'], d['selector'])
+        if key in seen_selectors:
+            continue
+        seen_selectors.add(key)
+        for alt in d['selector'].split(','):
+            if _BARE_THEME.search(' ' + alt.strip()) and not alt.strip().startswith(':root'):
+                found['theme scope'].append((d, 'bare [data-theme] — scope it to :root[data-theme]'))
+                break
+    return found
+
+
+def duplicate_classes(decls: list[dict]) -> dict[str, list[str]]:
+    """Classes with a bare `.name { }` rule in more than one template."""
+    where: dict[str, dict[str, int]] = {}
+    for d in decls:
+        if not d['path'].startswith('templates/') or d['keyframes']:
+            continue
+        for alt in d['selector'].split(','):
+            m = re.fullmatch(r'\.([A-Za-z][\w-]*)', alt.strip())
+            if m:
+                where.setdefault(m.group(1), {}).setdefault(d['path'], d['line'])
+    return {
+        cls: [f'{p}:{ln}' for p, ln in sorted(files.items())]
+        for cls, files in sorted(where.items())
+        if len(files) > 1 and cls not in KNOWN_DUPLICATES
+    }
+
+
+def print_rules_report() -> int:
+    decls = collect_declarations()
+    found = check_rules(decls)
+    dups = duplicate_classes(decls)
+
+    print()
+    print(_col("═" * 68, _BOLD))
+    print(_col("  PINE — Source-literal compliance", _BOLD))
+    print(_col("═" * 68, _BOLD))
+    print()
+    total = 0
+    for category, rows in found.items():
+        if not rows:
+            continue
+        total += len(rows)
+        print(_col(f"▸ {category} ({len(rows)})", _BOLD))
+        for d, msg in sorted(rows, key=lambda r: (r[0]['path'], r[0]['line'])):
+            sel = d['selector'] if len(d['selector']) <= 48 else d['selector'][:45] + '…'
+            print(f"  {d['path']}:{d['line']}  {sel}  {{ {d['prop']}: {d['value'][:60]} }}")
+            print(_col(f"      {msg}", _YELLOW))
+        print()
+    if dups:
+        total += len(dups)
+        print(_col(f"▸ classes defined in more than one template ({len(dups)})", _BOLD))
+        for cls, places in dups.items():
+            print(f"  .{cls:<28} " + ', '.join(places))
+        print()
+
+    print("─" * 68)
+    if total:
+        print(_col(f"RESULT: ⚠  {total} finding(s).", _YELLOW))
+    else:
+        print(_col("RESULT: ✓  Source CSS complies with DESIGN.md.", _GREEN))
+    print()
+    return 1 if total else 0
+
+
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 def main() -> None:
+    if '--rules' in sys.argv[1:]:
+        sys.exit(print_rules_report())
     data = collect()
-    sys.exit(print_report(data))
+    typography = print_report(data)
+    rules = print_rules_report()
+    sys.exit(1 if (typography or rules) else 0)
 
 
 if __name__ == "__main__":

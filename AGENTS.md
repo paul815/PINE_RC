@@ -135,7 +135,7 @@ backend/
                   # backup, system_check, ffmpeg_setup, transcript_format
   ml_worker/      # ML process. torch/whisperx/pyannote/mlx live only here
     engines/      # whisperx_engine (CUDA/CPU), mlx_engine (Apple Silicon), behind base.py
-  templates/      # main, recording, tags, manage_tags, settings, onboarding
+  templates/      # main, recording, tags, settings, onboarding
   scripts/        # check_mojibake.py, check_line_endings.py, build_cyrillic_fonts.py
   data/           # pine.db (created at runtime)
   tests/          # pytest suite with conftest.py fixtures
@@ -228,11 +228,16 @@ migrations at startup. New migrations go there.
 
 ### Frontend
 
-- Six standalone Jinja2 templates with inline `<style>` and `<script>`. None uses
+- Five standalone Jinja2 templates with inline `<style>` and `<script>`. None uses
   `{% extends %}`
-- Shared CSS in `app/static/css/`: `tokens.css` (palette, radius scale, z-index
-  ladder), `button-system.css`, `fonts.css`, `save-status.css` — all six templates
-  link them
+- Shared CSS in `app/static/css/`: `tokens.css` (palette, spacing and radius
+  scales, z-index ladder), `fonts.css`, `button-system.css`, `ui-system.css`,
+  `save-status.css`. Every template links them *before* its own `<style>` block
+  (onboarding skips `save-status.css`), so a page rule overrides a shared one at
+  equal specificity
+- `python backend/tools/design_audit.py --rules` checks the CSS against
+  `documentation/DESIGN.md` — spacing scale, radii, colours, z-index, motion,
+  shadows, line height, tracking, duplicated classes — and names each line
 - A colour or font is defined in exactly one place. What remains in a template's
   `:root` is page-only (layout metrics, player colours)
 - Never write a raw `z-index` — use the `--z-*` ladder. Scope theme rules to

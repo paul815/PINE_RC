@@ -13,8 +13,8 @@
 .toast {
   position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
   background: var(--card); border: 1px solid var(--border); border-radius: var(--radius, 8px);
-  padding: 8px 18px; font-size: 0.923rem; color: var(--fg);
-  box-shadow: 0 8px 24px rgba(0,0,0,.18);
+  padding: var(--space-8) var(--space-20); font-size: 0.923rem; color: var(--fg);
+  box-shadow: var(--shadow-md);
   opacity: 0; transition: opacity 0.2s; pointer-events: none; z-index: 2100;
   max-width: 440px; text-align: center;
 }
@@ -36,12 +36,12 @@
   font-size: 0.769rem;
   font-weight: 400;
   font-style: normal;
-  line-height: 1.4;
+  line-height: var(--lh-ui);
   letter-spacing: normal;
   text-transform: none;
   white-space: nowrap;
   color: var(--muted-fg);
-  margin-left: 8px;
+  margin-left: var(--space-8);
   vertical-align: middle;
   flex-shrink: 0;          /* headings are flex rows; never squeeze the badge */
   opacity: 0; transition: opacity 0.25s ease;
@@ -51,7 +51,7 @@
 /* Errors stay put until a retry succeeds — they are never dismissed on a timer. */
 .save-status.is-error {
   opacity: 1; transition: none;
-  color: var(--destr, #dc2626);
+  color: var(--destr);
 }
 .save-status.is-error a {
   color: inherit; text-decoration: underline; cursor: pointer;
@@ -59,7 +59,7 @@
 }
 
 /* The page-level status sits at the far right of the top bar. */
-.top-bar #pageSaveStatus { margin-left: auto; margin-right: 4px; }
+.top-bar #pageSaveStatus { margin-left: auto; margin-right: var(--space-4); }
 
 @media (prefers-reduced-motion: reduce) {
   .toast, .save-status { transition: none; }

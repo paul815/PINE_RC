@@ -43,7 +43,7 @@ PINE/
 │   │   ├── progress.py    # one 0–100 scale across all stages
 │   │   ├── errors.py      # exceptions shared with the caller
 │   │   └── protocol.py    # JSON messages over the pipe
-│   ├── templates/         # Jinja2 HTML (main, recording, settings, tags, manage_tags, onboarding)
+│   ├── templates/         # Jinja2 HTML (main, recording, settings, tags, onboarding)
 │   ├── tests/             # pytest suite
 │   ├── tools/             # dev helpers (dev_reset, design/contrast audits)
 │   ├── data/              # pine.db (SQLite), created at runtime

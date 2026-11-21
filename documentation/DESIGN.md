@@ -7,7 +7,7 @@ colors:
     muted: "hsl(220, 15%, 94%)"
     muted-fg: "hsl(220, 10%, 46%)"
     accent: "hsl(152, 60%, 42%)"
-    accent-fg: "hsl(220, 25%, 10%)"
+    accent-fg: "#fff"
     accent-dim: "hsla(152, 60%, 42%, 0.10)"
     accent-bd: "hsla(152, 60%, 42%, 0.25)"
     accent-on-dim: "hsl(152, 60%, 27%)"
@@ -18,6 +18,7 @@ colors:
     destr: "hsl(0, 72%, 51%)"
     destr-dim: "hsla(0, 72%, 51%, 0.10)"
     destr-bd: "hsla(0, 72%, 51%, 0.25)"
+    destr-fg: "#fff"
     warn: "hsl(38, 90%, 55%)"
     warn-dim: "hsla(38, 90%, 55%, 0.10)"
     warn-bd: "hsla(38, 90%, 55%, 0.25)"
@@ -28,11 +29,11 @@ colors:
     muted: "hsl(220, 14%, 14%)"
     muted-fg: "hsl(220, 10%, 54%)"
     accent: "hsl(152, 55%, 45%)"
-    accent-fg: "hsl(220, 25%, 10%)"
+    accent-fg: "#fff"
     accent-dim: "hsla(152, 55%, 45%, 0.12)"
     accent-bd: "hsla(152, 55%, 45%, 0.28)"
     accent-on-dim: "hsl(152, 55%, 45%)"
-    accent-bd-solid: "hsl(152, 55%, 45%)"
+    accent-bd-solid: "hsla(152, 55%, 45%, 0.55)"
     border: "hsl(220, 16%, 17%)"
     secondary: "hsl(220, 14%, 16%)"
     sunken: "hsl(220, 18%, 9%)"
@@ -44,7 +45,7 @@ colors:
     warn-bd: "hsla(38, 85%, 60%, 0.25)"
 
 typography:
-  font-body: "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
+  font-body: "'Inter', sans-serif"
   font-mono: "'JetBrains Mono', monospace"
   scale:
     xs: "0.769rem"
@@ -53,13 +54,29 @@ typography:
     lg: "1rem"
     title: "1.077rem"
     page: "1.538rem"
+  line-height:
+    control: "1"
+    heading: "1.3"
+    ui: "1.5"
+    prose: "1.65"
+  letter-spacing:
+    default: "0"
+    label: "0.08em"
+    wordmark: "0.14em"
+
+spacing: [2, 4, 6, 8, 10, 12, 16, 20, 24, 32, 40, 48]
 
 layout:
+  radius-xs: "2px"
+  radius-sm: "4px"
   radius: "6px"
-  top-bar-h: "20px"
+  radius-lg: "10px"
+  top-bar: "48px"
+  right-header-pad-top: "20px"
   left-header-pad-y: "6px"
   left-header-gap: "6px"
-  search-input-h: "28px"
+  field-h: "32px"
+  field-h-sm: "28px"
 
 components:
   button:
@@ -113,7 +130,9 @@ components:
 
 PINE is a local desktop web app for interview transcription and analysis, running on Windows, macOS and Linux (Windows is the primary target; the macOS chrome is why the top bar leaves a traffic-light zone). The UI is calm and focused — built for long work sessions where distraction must be minimal. The palette is cool gray (hsl 220) with a green accent (`hsl(152, …)`). Both light and dark themes are first-class: the app ships with a theme toggle and respects user preference.
 
-**Source of truth:** `backend/app/static/css/tokens.css`, linked by all six templates before their own `<style>` block. Companion sheets: `button-system.css` (shared control geometry), `fonts.css` (bundled `@font-face`), `save-status.css`. The values in this document mirror `tokens.css` — if the two disagree, the CSS wins.
+**Source of truth:** `backend/app/static/css/tokens.css`. Companion sheets: `fonts.css` (bundled `@font-face`), `button-system.css` (every button), `ui-system.css` (everything that is not a button: fields, labels, modal and its option rows, empty state, top bar, toggle switch, colour grid, export options) and `save-status.css`. All five templates link them in that order **before** their own `<style>` block (onboarding has no save status and skips that sheet), so at equal specificity a page's own rule overrides a shared one — which is what a local override should do. Until 2026-11 the shared sheets loaded *after* the page block and silently won; `documentation/2026-11-21-inert-rule-inventory.json` lists what that hid. The values in this document mirror `tokens.css` — if the two disagree, the CSS wins.
+
+**Checking it:** `python backend/tools/design_audit.py --rules` lists every declaration that breaks a rule below, as `file:line`, and exits non-zero if there is one. Its exemptions live beside the check, each with its reason. `backend/tests/test_design_audit.py` keeps its spacing scale equal to `tokens.css`.
 
 A colour now changes in one place. The private copies the six templates used to
 carry — 168 palette declarations and 117 `@font-face` blocks — are gone; what
@@ -193,15 +212,35 @@ that needs a different button size picks a different button class.
 
 The user can override the body font family and font size at runtime through Settings. Components must use `var(--font-body)` so the override propagates.
 
+**Line height** — four, by job: `1` a single-line control, `1.3` a heading, `1.5` UI text, `1.65` long-form reading (descriptions, editable content, the transcript). Tokens: `--lh-control`, `--lh-heading`, `--lh-ui`, `--lh-prose`.
+
+**Letter spacing** — none by default. Uppercase micro-labels use `--label-tracking` (0.08em); the PINE wordmark uses `--track-wordmark` (0.14em). No negative tracking, and never in `px`.
+
 ## Layout
 
 The app shell is a fixed-height window (no scroll on the outer frame). Layout uses CSS flexbox and grid.
 
 - **Left sidebar**: fixed-width, contains navigation and project list
 - **Main panel**: fills remaining space, scrolls internally
-- **Top bar**: `20px` height — minimal traffic-light zone on macOS
+- **Top bar**: `48px` (`--h-topbar`), defined once in `ui-system.css` and used by every screen but onboarding. `main.html`'s `--top-bar-h: 20px` is not the bar: it is the right header's top padding, which lines the project title up with the first rule in the left column
 - **Left header**: `6px` vertical padding, `6px` gap between elements
-- Global border-radius for surfaces: `6px` (buttons use `8px`). Radius scale: `--radius-sm` 4px · `--radius` 6px · `--radius-lg` 10px · `--radius-pill` 999px
+- Global border-radius for surfaces: `6px` (buttons use `8px`). Radius scale: `--radius-xs` 2px (marks in running text, drag lines, the resize grip) · `--radius-sm` 4px · `--radius` 6px · `--radius-lg` 10px · `--radius-pill` 999px
+
+### Spacing
+
+Twelve steps in three registers — every `padding`, `margin` and `gap` uses one of them:
+
+| Register | Steps | Use |
+|---|---|---|
+| micro | 2 · 4 · 6 · 8 · 10 | inside controls: icon gaps, chip padding |
+| block | 12 · 16 · 20 · 24 · 32 | between elements and inside panels |
+| page | 40 · 48 | screen gutters, empty-state padding |
+
+Shared sheets and new code write them as `var(--space-N)`; a template's own `<style>` may keep the literal `px`, but only a value on the scale. Not part of the scale: negative margins and `top/left/right/bottom` (offsets, not rhythm), the two scroll tails below a list (60px, 80px), and three 1px optical nudges — each named in `design_audit.py`. Six and ten stay on the scale on purpose: dropping them would tighten the whole interface.
+
+### Control heights
+
+Buttons and icon buttons take theirs from `button-system.css`. Everything else: `--h-field` 32px, `--h-field-sm` 28px (the search inputs), `--h-topbar` 48px. Apply them as `min-height`, never `height` — the root font size goes up to 17px and a fixed height clips the text.
 
 ### Stacking
 
@@ -237,9 +276,23 @@ All interactive controls inherit from a unified base class. Over 40 semantic but
 
 **Icon-only buttons**: use icon-size tokens (`20px` xs / `22px` sm / `28px` md) — width equals height.
 
-**Focus ring**: `box-shadow: 0 0 0 3px var(--accent-dim)` — never use `outline` directly.
+**Focus ring**: `box-shadow: var(--btn-focus-ring)` (`0 0 0 3px var(--accent-dim)`) — never use `outline` directly. Every text field gets it on `:focus-visible` from one low-specificity rule in `ui-system.css`, on top of its border colour; a component that draws its own indicator (the segment stepper) turns it off.
 
-**Transition**: all interactive state changes animate at `0.15s ease` across background, border, color, box-shadow, opacity, and transform.
+**Transition**: all interactive state changes animate at `0.15s ease` across background, border, color, box-shadow, opacity, and transform. Motion that tracks data or a notification — a progress fill, a toast fading — is not interactive and keeps its own duration.
+
+### Elevation and rings
+
+`box-shadow` does three different jobs; keep them apart.
+
+- **Elevation** — only the three tokens: `--shadow-sm` (a card lifted off the page), `--shadow-md` (anything that opens over the page: dropdown, popover, tooltip, toast), `--shadow-lg` (modals). The dark theme has its own alphas. One exception, the back-to-recording button's rest/hover lift pair, waits for a hover-lift token.
+- **Rings** — width tokens that compose with any colour: `--ring-hairline` (`0 0 0 1px`) is an outline standing in for a border, as on inline-edit fields; `--ring-focus` (`0 0 0 3px`) is the focus width. A hairline is never a focus indicator.
+- **Inset rules** — `inset` shadows used as drop indicators or an edit-mode edge stay local, with a comment.
+
+### Toggle switch, colour grid, dialog rows
+
+`.sw` is 36×20 with a 16px knob, in `ui-system.css`; disabled dims to 0.45 like a disabled button. `.color-grid` is six 22px swatches across with a 6px gap.
+
+Option rows in a dialog (`.m-row`, `.m-lbl`, `.m-sub`) match the rows in Settings that offer the same choices: 10px vertical padding, a hairline between rows, the label in `--fg`. The export dialogs on main and recording and find-and-replace all use them; the format picker and its hint (`.fmt-pick`, `.fmt-hint`) are shared too.
 
 ## Do's and Don'ts
 
@@ -254,3 +307,4 @@ All interactive controls inherit from a unified base class. Over 40 semantic but
 - Don't add new one-off font sizes outside the six-step scale, and never size text in `px`
 - Don't create new button classes without inheriting from the unified base selector list in `button-system.css`
 - Don't use `outline` for focus indicators — it conflicts with the macOS window chrome
+- Don't write a spacing value off the scale, a raw radius, colour or `z-index`, or a shadow that is not a token — `design_audit.py --rules` will name the line

@@ -63,7 +63,7 @@
   gap: var(--btn-gap);
   border-radius: var(--btn-radius);
   font-family: var(--font-body);
-  line-height: 1;
+  line-height: var(--lh-control);
   white-space: nowrap;
   text-decoration: none;
   cursor: pointer;
@@ -243,13 +243,13 @@
    with a variant class (.btn-outline) — this only sets the box. */
 .btn-inline-compact {
   min-height: 0;
-  padding: 2px 8px;
+  padding: var(--space-2) var(--space-8);
   font-size: var(--btn-font-sm);
 }
 
 :is(.btn-primary, .btn-save, .m-export-btn, .import-confirm-btn) {
   background: var(--accent);
-  color: var(--accent-fg, #fff);
+  color: var(--accent-fg);
   border: 1px solid var(--accent);
   font-weight: 600;
 }
@@ -334,13 +334,13 @@
 
 .btn-reset:hover:not(:disabled) {
   background: var(--destr);
-  color: #fff;
+  color: var(--destr-fg);
   border-color: var(--destr);
 }
 
 .btn-delete-confirm {
   background: var(--destr);
-  color: #fff;
+  color: var(--destr-fg);
   border: 1px solid var(--destr);
   font-weight: 600;
 }
@@ -457,7 +457,7 @@
 
 .tag-chip-remove-btn:hover:not(:disabled) {
   background: var(--destr);
-  color: #fff;
+  color: var(--destr-fg);
   border-color: var(--destr);
 }
 
@@ -472,7 +472,7 @@
   align-items: center;
   justify-content: center;
   padding: 0;
-  line-height: 1;
+  line-height: var(--lh-control);
   font-family: var(--font-body);
   cursor: pointer;
   flex-shrink: 0;
@@ -549,7 +549,7 @@
 /* The multiplication-sign glyph some delete buttons use instead of an icon. */
 .icon-btn .x {
   font-size: 1.077rem;
-  line-height: 1;
+  line-height: var(--lh-control);
 }
 
 .play-btn {
@@ -578,7 +578,8 @@
 
 .color-swatch.selected {
   border-color: var(--fg);
-  box-shadow: 0 0 0 1px var(--card);
+  /* A hairline of card colour cuts the swatch out of whatever sits behind it. */
+  box-shadow: var(--ring-hairline) var(--card);
 }
 
 /* Larger target where the swatch is the field itself rather than one cell of
@@ -626,7 +627,7 @@
   min-width: 0;
   height: auto;
   min-height: 0;
-  padding: 0 0 0 4px;
+  padding: 0 0 0 var(--space-4);
   color: var(--muted-fg);
   border-radius: var(--radius);
   transition: color 0.15s;
@@ -637,7 +638,7 @@
   height: 14px;
   display: block;
   flex-shrink: 0;
-  transition: transform 0.18s ease;
+  transition: transform 0.15s ease;
 }
 
 .btn-toggle-segs:hover:not(:disabled) {
@@ -690,7 +691,7 @@
   color: var(--muted-fg);
   font-size: 0.769rem;
   font-weight: 700;
-  line-height: 1;
+  line-height: var(--lh-control);
   cursor: help;
   padding: 0;
   flex-shrink: 0;
@@ -713,7 +714,7 @@
   min-width: 0;
   height: auto;
   min-height: 0;
-  padding: 4px;
+  padding: var(--space-4);
   color: var(--muted-fg);
   border-radius: var(--radius);
   transition: color 0.15s;
@@ -735,16 +736,44 @@
   box-shadow: none;
 }
 
+/* The "Archive" disclosure at the foot of a project list (main's sidebar,
+   recording's import dialog). It reads as an uppercase micro-label, so it
+   takes the label's weight and tracking; the size stays the button's. */
 .archive-toggle-btn {
+  width: 100%;
   justify-content: flex-start;
   align-items: center;
-  gap: 8px;
-  padding: 8px 12px;
+  gap: var(--space-8);
+  padding: var(--space-8) var(--space-12);
   background: transparent;
   color: var(--muted-fg);
   border: 1px solid transparent;
   border-top-color: var(--border);
   box-shadow: none;
+  font-family: var(--font-body);
+  font-weight: var(--label-weight);
+  letter-spacing: var(--label-tracking);
+  text-transform: uppercase;
+}
+
+.archive-toggle-btn svg {
+  flex-shrink: 0;
+  transition: transform 0.15s ease;
+}
+
+.archive-toggle-btn.collapsed svg {
+  transform: rotate(-90deg);
+}
+
+/* Count of archived projects, at the far end of the toggle. */
+.archive-badge {
+  margin-left: auto;
+  padding: var(--space-2) var(--space-6);
+  border-radius: var(--radius-pill);
+  background: var(--secondary);
+  color: var(--muted-fg);
+  font-family: var(--font-mono);
+  font-size: 0.769rem;
 }
 
 .archive-toggle-btn:hover:not(:disabled) {
