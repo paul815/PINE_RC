@@ -211,7 +211,8 @@ The single-file path is untouched: no tracks means the pyannote flow, unchanged.
   setting calls `refresh_auto_backup()`, which stops the timer and starts it
   again, so a new interval takes effect without a restart
 - **Retention:** `prune_backups()` keeps the `backup_retention_count` newest
-  `pine_backup_*.zip` (default 5); `0` or less keeps everything
+  `pine_backup_*.zip` (default 10 — with the daily default, about ten days of
+  history); `0` or less keeps everything
 
 ### Supervisor
 

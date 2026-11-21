@@ -524,6 +524,34 @@ class TestPruneBackups:
             backups = list_backups(app)
             assert len(backups) == 2
 
+    def test_prune_default_keeps_ten(self, app, client):
+        """With no retention saved, prune keeps 10 and Settings reports 10."""
+        import json
+
+        from app.services.backup_service import (
+            BACKUP_VERSION,
+            _backup_dir,
+            list_backups,
+            prune_backups,
+        )
+
+        with app.app_context():
+            backup_path = _backup_dir(app)
+            for i in range(12):
+                fname = f'pine_backup_2026-01-{i+1:02d}T00-00-00.zip'
+                manifest = {'backup_version': BACKUP_VERSION, 'created_at': f'2026-01-{i+1:02d}T00:00:00+00:00',
+                            'include_audio': False, 'project_count': 0, 'recording_count': 0,
+                            'projects': [], 'checksums': {}}
+                with zipfile.ZipFile(os.path.join(backup_path, fname), 'w') as zf:
+                    zf.writestr('manifest.json', json.dumps(manifest))
+
+            prune_backups(app)
+            names = sorted(b['filename'] for b in list_backups(app))
+            assert len(names) == 10
+            assert names[0] == 'pine_backup_2026-01-03T00-00-00.zip'
+
+        assert client.get('/api/settings').get_json()['backup_retention_count'] == '10'
+
 
 class TestUploadBackup:
     def test_upload_valid_backup(self, app, client):

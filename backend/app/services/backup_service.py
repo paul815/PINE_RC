@@ -824,7 +824,7 @@ def delete_backup(app, filename):
 
 def prune_backups(app):
     """Keep only the N most recent backups per retention setting."""
-    retention = int(Setting.get('backup_retention_count', '5') or '5')
+    retention = int(Setting.get('backup_retention_count', '10') or '10')
     if retention <= 0:
         return
     backup_path = _backup_dir(app)

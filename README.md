@@ -218,7 +218,7 @@ Typical flow: create a project → fill in the brief → upload recordings → w
 
 Paths for models, projects and backups are chosen during setup and changeable in Settings. Annotations are plain JSON next to the transcript on purpose — a project folder is readable without PINE.
 
-- **Backups** — Settings → Backup & Restore. Automatic on startup and daily, weekly or monthly (daily by default), keeping the last 3, 5, 10 or all. Media files are excluded unless you ask for them. Restoring writes a safety snapshot first and never overwrites your token or paths.
+- **Backups** — Settings → Backup & Restore. Automatic on startup and daily, weekly or monthly (daily by default), keeping the last 3, 5, 10 or all (10 by default). Media files are excluded unless you ask for them. Restoring writes a safety snapshot first and never overwrites your token or paths.
 - **Handing a project to a colleague** — the Transfer button packages transcripts, annotations and metadata as a ZIP, without the audio.
 - **Starting over** — Settings → Danger zone, or `backend/reset_win.bat` / `backend/reset.command`. To uninstall, delete the folder, then whatever PINE put elsewhere: the shortcuts you asked for, any models, projects or backups folder you pointed outside it, the alignment models in the user cache (above), and — if you ever reset from Settings — the safety snapshot in the system temp folder, `pine_safety_backups`.
 

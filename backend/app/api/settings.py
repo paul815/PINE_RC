@@ -115,7 +115,7 @@ DEFAULTS = {
     'backup_include_audio': 'false',
     'auto_backup_enabled': 'false',
     'auto_backup_interval_hours': '24',
-    'backup_retention_count': '5',
+    'backup_retention_count': '10',
     'pii_threshold': '0.8',
     'last_open_project_id': '',
     'transcription_complete_sound_enabled': 'true',

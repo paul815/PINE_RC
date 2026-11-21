@@ -503,8 +503,8 @@ input[type="range"] { font-size: 1rem; }
             <div class="row-lbl">Keep last N backups</div>
             <div class="fmt-group" id="retentionGroup">
               <button class="fmt-btn" data-val="3" onclick="setRetention('3',this)">3</button>
-              <button class="fmt-btn on" data-val="5" onclick="setRetention('5',this)">5</button>
-              <button class="fmt-btn" data-val="10" onclick="setRetention('10',this)">10</button>
+              <button class="fmt-btn" data-val="5" onclick="setRetention('5',this)">5</button>
+              <button class="fmt-btn on" data-val="10" onclick="setRetention('10',this)">10</button>
               <button class="fmt-btn" data-val="0" onclick="setRetention('0',this)">All</button>
             </div>
           </div>
@@ -1279,7 +1279,7 @@ function applyBackupSettings() {
   const legacyInterval = { '6': '24', '12': '24', '72': '168' };
   if (legacyInterval[interval]) interval = legacyInterval[interval];
   document.getElementById('autoBackupFreq').value = autoOn ? interval : 'off';
-  const retention = settings.backup_retention_count || '5';
+  const retention = settings.backup_retention_count || '10';
   document.querySelectorAll('#retentionGroup .fmt-btn').forEach(b => b.classList.toggle('on', b.dataset.val === retention));
   loadBackupList();
 }
