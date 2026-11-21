@@ -5,7 +5,7 @@ Cursor, and whatever comes next. It replaces the former `documentation/AGENTS.md
 and `documentation/CLAUDE.md`, which said much of the same thing in two places
 and, sitting one directory down, were loaded by neither tool.
 
-Last updated: 2026-08-27.
+Last updated: 2026-11-22.
 
 ## 1) Mission
 
@@ -87,7 +87,11 @@ dependencies on first run, then start the server on later launches.
 
 ## 5) Running tests
 
-Run from `backend/` with the venv active. 760 tests, all green as of 2026-08-27.
+Run from `backend/` with the venv active. 2422 tests, all green as of 2026-11-21
+(Windows). In an installed copy (after onboarding) the 9 installer tests fail
+because `Setup_*` has moved under `backend/`; that is expected there, not in a
+clone. The suite currently leaves `tmp*` and `pytest-api-quit-*` directories in
+the working tree; they are gitignored.
 
 ```bash
 cd backend && pytest                                    # all
@@ -273,6 +277,23 @@ the root `CLAUDE.md` into `documentation/`, drops both installers under
 Launch PINE at the end of onboarding, not before), and a reset deletes everything
 at the root that is not listed in `backend/tools/reset_preserve_root.txt`. A new
 root-level file needs an entry in that allowlist or the first reset takes it.
+
+### Repositories, branches and machines
+
+- **`origin` = PINE_RC** (`paul815/PINE_RC`) is where all work happens: branch
+  off `main`, merge back into `main`.
+- **`pine` = PINE** (`paul815/PINE`, public) receives `main` only once it has
+  been verified on both Windows and macOS. Never push there without an explicit
+  request. A release is a version bump plus a tag; the in-app update check reads
+  `releases/latest`, so an untagged push reaches no users.
+- Machines: a Windows desktop (CUDA) and a personal Mac each have a single clone
+  of PINE_RC and run Claude Code. A work Mac has no Claude Code and is used only
+  for testing: `git pull`, run, and file anything found as a PINE_RC issue.
+- Open work lives in PINE_RC GitHub Issues, not in an agent's local memory, so it
+  is visible from every machine. Hand-off between machines is `git push` /
+  `git pull` of a branch plus the issue number.
+- An installed copy that holds real projects (`projects/`, `backend/data/`) is
+  not a development checkout. Do not develop in it and do not delete it.
 
 ## 9) Security and privacy
 
