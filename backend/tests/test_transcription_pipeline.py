@@ -988,10 +988,11 @@ class TestMacModelChoice:
     def test_mac_installs_the_measured_stack(self):
         from app.services.pip_installer import PIP_INSTALL_TARGETS, _pinned
         for spec in ('ctranslate2==4.9.0', 'whisperx==3.8.6', 'faster-whisper==1.2.1',
-                     'torch==2.8.0', 'pyannote-audio==4.0.7'):
+                     'torch==2.8.0', 'pyannote-audio'):
             assert spec in PIP_INSTALL_TARGETS
         assert not any(t.startswith('mlx') for t in PIP_INSTALL_TARGETS)
         assert _pinned('whisperx') == 'whisperx==3.8.6'
+        assert _pinned('pyannote-audio') == 'pyannote-audio'
         assert _pinned('not-pinned') == 'not-pinned'
 
 

@@ -44,6 +44,10 @@ if IS_MAC:
     # set mac-bench measured on 2026-11-21 (99.9% of words as on Windows on an
     # 88-min interview). whisperx pins torch~=2.8.0 and its companions, and a
     # Mac has no CUDA channel to keep apart, so one resolve installs the lot.
+    # pyannote-audio is the exception and floats, as it does on Windows: 4.1
+    # computes WeSpeaker fbank on MPS instead of the CPU, and Windows has run
+    # 4.1.0 since 2026-11-18 with Gordon unchanged to the byte. Its Python >= 3.11
+    # floor is what Setup_MAC already demands.
     REQUIRED_PACKAGES = [
         ('torch', 'torch', 'PyTorch ML runtime'),
         ('torchaudio', 'torchaudio', 'Alignment model + pyannote audio backend'),
@@ -56,7 +60,7 @@ if IS_MAC:
     PIP_INSTALL_TARGETS = [
         'torch==2.8.0', 'torchaudio==2.8.0', 'torchvision==0.23.0',
         'whisperx==3.8.6', 'faster-whisper==1.2.1', 'ctranslate2==4.9.0',
-        'pyannote-audio==4.0.7', 'transformers==4.57.6', 'huggingface-hub==0.36.2',
+        'pyannote-audio', 'transformers==4.57.6', 'huggingface-hub==0.36.2',
     ]
 else:
     REQUIRED_PACKAGES = [
