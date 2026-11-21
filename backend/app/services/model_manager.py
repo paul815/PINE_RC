@@ -75,16 +75,10 @@ MODEL_REGISTRY = {
         'size_bytes': 3_000_000_000,
         'required': True,
         'language': 'multi',
-        'platform': None,           # Windows / Linux only (None = all, but skipped on Mac)
-    },
-    'mlx-whisper-large-v3': {
-        'name': 'mlx-whisper large-v3 (Metal)',
-        'function': 'stt',
-        'repo_id': 'mlx-community/whisper-large-v3-mlx',
-        'size_bytes': 3_000_000_000,
-        'required': True,
-        'language': 'multi',
-        'platform': 'darwin',       # Mac only
+        # Every platform: on Apple Silicon it runs on Metal (CTranslate2 4.9+),
+        # the same engine and weights as Windows. The Mac's former model,
+        # mlx-whisper-large-v3, is retired — see LEGACY_STT_MODEL_ID_ALIASES.
+        'platform': 'all',
     },
     'pyannote-diarization': {
         'name': 'pyannote speaker-diarization-community-1',
@@ -325,16 +319,21 @@ def validate_hf_token(token):
 
 STT_MODEL_QUALITY = 'whisperx-large-v3'
 
+#: The Mac's model until 2026-11: mlx-whisper in 120-s windows. Retired — on
+#: an 88-min interview it matched Windows in 94.4% of words with 8 holes, where
+#: WhisperX on Metal matched 99.9% (mac-bench, 2026-11-21). Kept as an alias
+#: target only, so a stored setting naming it lands on the current model.
 MLX_STT_MODEL_QUALITY = 'mlx-whisper-large-v3'
 
 LEGACY_STT_MODEL_ID_ALIASES = {
     'whisperx-large-v3-turbo': STT_MODEL_QUALITY,
-    'mlx-whisper-large-v3-turbo': MLX_STT_MODEL_QUALITY,
+    'mlx-whisper-large-v3-turbo': STT_MODEL_QUALITY,
+    MLX_STT_MODEL_QUALITY: STT_MODEL_QUALITY,
 }
 
 def get_default_stt_model():
-    """Return the default STT model ID for the current platform."""
-    return MLX_STT_MODEL_QUALITY if IS_MAC else STT_MODEL_QUALITY
+    """Return the default STT model ID — the same on every platform."""
+    return STT_MODEL_QUALITY
 
 def supported_stt_models():
     """STT model IDs a user may choose on this platform, best-quality first."""
@@ -343,9 +342,8 @@ def supported_stt_models():
 def normalize_stt_model_id(stt_model_id):
     """Map legacy/foreign/invalid STT IDs onto one this platform can run.
 
-    Mac is mlx-only for Whisper: ``whisperx-large-v3`` is never registered (see
-    ``_model_for_platform``) and WhisperX is never pip-installed there, so letting
-    that ID through only produces ``No module named 'whisperx'`` at transcribe time.
+    One model everywhere: ``whisperx-large-v3``, on Metal on a Mac. The Mac's
+    retired mlx ids map onto it, as does anything unknown.
     """
     model_id = (stt_model_id or '').strip()
     if model_id in LEGACY_STT_MODEL_ID_ALIASES:
@@ -556,6 +554,8 @@ def _preload_alignment_model():
     """Pre-download WhisperX alignment model (English) so first transcription isn't delayed."""
     try:
         _install_step('Pre-downloading alignment model (English)', 'Downloading alignment model')
+        # On a Mac, torch.hub's urllib download needs the CA bundle that
+        # app._ensure_ca_bundle() sets at import.
         import torchaudio
         bundle = getattr(torchaudio.pipelines, 'WAV2VEC2_ASR_BASE_960H', None)
         if bundle:
@@ -829,8 +829,9 @@ def download_models(app, model_ids, models_path, hf_token=None, finish_onboardin
                         })
 
                 if finish_onboarding:
-                    if not IS_MAC:
-                        _preload_alignment_model()
+                    # The Mac aligns with WhisperX too now (on Metal), so it
+                    # preloads the same alignment model as Windows.
+                    _preload_alignment_model()
                     _warmup_pyannote_community1(models_path, hf_token=hf_token)
                     from ..models.setting import Setting
                     Setting.set('onboarding_complete', 'true')

@@ -39,14 +39,25 @@ IS_MAC = sys.platform == 'darwin'
 _PIP_ENV = {**os.environ, 'PIP_REQUIRE_VIRTUALENV': '1', 'PYTHONNOUSERSITE': '1'}
 
 if IS_MAC:
+    # Apple Silicon runs the Windows engine — WhisperX + faster-whisper on
+    # CTranslate2's Metal backend, which arrived in 4.9. Every version is the
+    # set mac-bench measured on 2026-11-21 (99.9% of words as on Windows on an
+    # 88-min interview). whisperx pins torch~=2.8.0 and its companions, and a
+    # Mac has no CUDA channel to keep apart, so one resolve installs the lot.
     REQUIRED_PACKAGES = [
         ('torch', 'torch', 'PyTorch ML runtime'),
-        ('torchaudio', 'torchaudio', 'Audio backend for pyannote'),
-        ('mlx_whisper', 'mlx-whisper', 'Transcription (mlx-whisper, Metal-accelerated)'),
+        ('torchaudio', 'torchaudio', 'Alignment model + pyannote audio backend'),
+        ('torchvision', 'torchvision', 'Torch companion pinned by WhisperX'),
+        ('whisperx', 'whisperx', 'Transcription + alignment (WhisperX on Metal)'),
+        ('faster_whisper', 'faster-whisper', 'Whisper inference engine'),
+        ('ctranslate2', 'ctranslate2', 'Whisper runtime with Metal (4.9+)'),
         ('pyannote.audio', 'pyannote-audio', 'Speaker diarization (pyannote)'),
     ]
-    # torchaudio 2.9+ dropped AudioMetaData; patched at runtime in ml_worker.compat.patch_torchaudio_for_pyannote().
-    PIP_INSTALL_TARGETS = ['torch', 'torchaudio', 'mlx-whisper', 'pyannote-audio']
+    PIP_INSTALL_TARGETS = [
+        'torch==2.8.0', 'torchaudio==2.8.0', 'torchvision==0.23.0',
+        'whisperx==3.8.6', 'faster-whisper==1.2.1', 'ctranslate2==4.9.0',
+        'pyannote-audio==4.0.7', 'transformers==4.57.6', 'huggingface-hub==0.36.2',
+    ]
 else:
     REQUIRED_PACKAGES = [
         ('torchruntime', 'torchruntime', 'GPU auto-detection'),
@@ -96,9 +107,18 @@ def _check_packages():
 # The subset of REQUIRED_PACKAGES that must be importable before transcription.
 _MAC_TRANSCRIPTION_IMPORTS = [
     ('torch',          'torch'),
-    ('mlx_whisper',    'mlx-whisper'),
+    ('whisperx',       'whisperx'),
     ('pyannote.audio', 'pyannote-audio'),
 ]
+
+
+def _pinned(pip_name):
+    """On a Mac, the version PIP_INSTALL_TARGETS fixes for ``pip_name``, if any."""
+    if IS_MAC:
+        for spec in PIP_INSTALL_TARGETS:
+            if spec.split('==')[0] == pip_name:
+                return spec
+    return pip_name
 
 _TRANSCRIPTION_IMPORTS = [
     ('torch',          'torch'),
@@ -128,8 +148,62 @@ def ensure_transcription_dependencies():
     for imp, pip in _transcription_imports():
         if not _is_package_installed(imp):
             log.info('Installing missing transcription dependency: %s', pip)
-            _install_package_if_missing(imp, pip)
+            _install_package_if_missing(imp, _pinned(pip))
     return check_ml_deps()
+
+
+def _nltk_data_dir():
+    """The venv's own NLTK data directory — on NLTK's search path as sys.prefix/nltk_data."""
+    return os.path.join(sys.prefix, 'nltk_data')
+
+
+def _nltk_punkt_present():
+    return os.path.isdir(os.path.join(_nltk_data_dir(), 'tokenizers', 'punkt_tab'))
+
+
+def _ca_bundle_env():
+    """SSL_CERT_FILE for a subprocess that downloads through urllib, unless already set."""
+    if os.environ.get('SSL_CERT_FILE'):
+        return {}
+    try:
+        import certifi
+        return {'SSL_CERT_FILE': certifi.where()}
+    except ImportError:
+        return ({'SSL_CERT_FILE': '/etc/ssl/cert.pem'}
+                if os.path.isfile('/etc/ssl/cert.pem') else {})
+
+
+def ensure_nltk_punkt():
+    """Put NLTK's punkt_tab in the venv, where whisperx's alignment looks for it.
+
+    whisperx splits sentences with it and fetches it on first use through
+    urllib, only when it is missing. Python from python.org on a Mac has no CA
+    bundle until its "Install Certificates.command" is run, so that fetch fails
+    with CERTIFICATE_VERIFY_FAILED, whisperx's alignment raises, and the job
+    goes on without word timestamps — and after onboarding PINE may be offline
+    anyway (mac-bench, 2026-11-21). Fetched here with certifi's bundle, it is on
+    disk before the first job. Returns True when punkt_tab is in place.
+    """
+    if _nltk_punkt_present():
+        return True
+    if os.environ.get('PINE_TESTING'):
+        log.warning('PINE_TESTING set — skipping the punkt_tab download')
+        return False
+    code = ('import sys, nltk\n'
+            'ok = nltk.download("punkt_tab", download_dir=sys.argv[1], quiet=True,'
+            ' raise_on_error=True)\n'
+            'sys.exit(0 if ok else 1)\n')
+    try:
+        subprocess.run([sys.executable, '-c', code, _nltk_data_dir()],
+                       env={**_PIP_ENV, **_ca_bundle_env()},
+                       capture_output=True, text=True, timeout=300, check=True)
+    except subprocess.CalledProcessError as exc:
+        log.warning('punkt_tab download failed: %s', (exc.stderr or exc.stdout or '')[-400:])
+        return False
+    except Exception as exc:  # noqa: BLE001 — reported, not raised
+        log.warning('punkt_tab download failed: %s', exc)
+        return False
+    return _nltk_punkt_present()
 
 def _install_package_if_missing(import_name, pip_name):
     """Install pip package if not already installed. Returns True if installed or already present."""
@@ -459,6 +533,8 @@ def install_pip_packages():
 
     if all_installed:
         log.info('All required packages already installed.')
+        if IS_MAC and not ensure_nltk_punkt():
+            log.warning('punkt_tab is missing; word alignment needs it')
         _safe_emit('install:complete', {'skipped': True, 'packages': status})
         return True
 
@@ -482,8 +558,15 @@ def install_pip_packages():
         _install_emit(f'Missing:  {missing}')
 
         if IS_MAC:
-            _install_step('Installing PyTorch, mlx-whisper and pyannote', 'Installing ML packages\u2026')
+            _install_step('Installing PyTorch, WhisperX and pyannote', 'Installing ML packages\u2026')
             success = _run_pip(PIP_INSTALL_TARGETS)
+            if success:
+                _install_step('Fetching the sentence tokenizer for word alignment',
+                              'Alignment tokenizer')
+                success = ensure_nltk_punkt()
+                if not success:
+                    _install_emit('ERROR: could not download NLTK punkt_tab \u2014 '
+                                  'check the internet connection and run setup again.')
         else:
             # Five-phase install:
             #   1. torchruntime (--no-deps to avoid CPU torch)

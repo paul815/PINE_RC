@@ -32,7 +32,7 @@ PINE/
 │   │   ├── extensions.py  # db, socketio, ALLOWED_ORIGINS
 │   │   └── __init__.py    # create_app, routes
 │   ├── ml_worker/         # The ML process — torch/whisperx/pyannote live only here
-│   │   ├── engines/       # whisperx_engine (CUDA/CPU), mlx_engine (Apple Silicon), base
+│   │   ├── engines/       # whisperx_engine (CUDA/Metal/CPU), mlx_engine (retired), base
 │   │   ├── pipeline.py    # stage orchestration
 │   │   ├── diarize.py     # pyannote
 │   │   ├── tracks.py      # per-speaker track handling
@@ -114,9 +114,12 @@ projects/<folder_name>/
   `worker_client.py` (JSON messages over a pipe, `ml_worker/protocol.py`). Torch,
   WhisperX and pyannote are imported **only** in that child process, so a CUDA
   crash or an OOM kills the worker, not the backend
-- **Engines:** `ml_worker/engines/` — `whisperx_engine` on CUDA/CPU,
-  `mlx_engine` on Apple Silicon, behind a common `base.py` interface
-- **Device:** Auto-detects CUDA; falls back to CPU with int8
+- **Engines:** `ml_worker/engines/` — `whisperx_engine` on CUDA, Apple Silicon
+  (Metal, CTranslate2 4.9+) and CPU, behind a common `base.py` interface;
+  `mlx_engine` is retired on the Mac and no longer selected
+- **Device:** CUDA on Windows/Linux, Metal (float16) on a Mac; CPU with int8
+  otherwise. On Metal the engine hands Whisper and torch's MPS cache back
+  after each job (`release()`), since the GPU shares the Mac's RAM
 - **Progress:** SocketIO emits `transcription:status` — `{ recording_id, status, stage, message, percent? }`
 - **Language:** the worker detects it. Below `LANG_CONFIDENCE_MIN` (0.82), or with
   two candidates inside `LANG_CONFIDENCE_MARGIN` (0.10), it asks instead of
@@ -182,8 +185,8 @@ The single-file path is untouched: no tracks means the pyannote flow, unchanged.
 - **Required:** two diarization entries — `pyannote-diarization`
   (`pyannote/speaker-diarization-community-1`, the pipeline config and small
   assets) and `pyannote-wespeaker-voxceleb-resnet34-LM` (the embedding weights) —
-  plus the transcription model for the platform: `whisperx-large-v3`
-  (`Systran/faster-whisper-large-v3`), or `mlx-whisper-large-v3` on Mac. Both
+  plus the transcription model, the same on every platform: `whisperx-large-v3`
+  (`Systran/faster-whisper-large-v3`). Both
   pyannote repos are gated and download through the pyannote hub cache
 - **Transcription model:** downloaded during onboarding, re-installable from
   Settings (`/api/settings/stt-model/install`) if that download never finished;

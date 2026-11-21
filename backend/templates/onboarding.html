@@ -970,7 +970,7 @@ function updateSidebar() {
 async function loadSystemCheck() {
   const container = document.getElementById('syscheckList');
   container.innerHTML = '<div class="loading-spinner">Checking system&hellip;</div>';
-  // Detect platform (Mac uses mlx-whisper)
+  // Detect platform
   try {
     const st = await api('/status');
     isMac = !!st.is_mac;
@@ -1213,7 +1213,7 @@ async function startDownload() {
   if (!downloadModelIds.length) {
     const onbStatus = await api('/status');
     const mods = onbStatus.modules || [];
-    const sttId = onbStatus.stt_model_id || (isMac ? 'mlx-whisper-large-v3' : 'whisperx-large-v3');
+    const sttId = onbStatus.stt_model_id || 'whisperx-large-v3';
     downloadModelIds = [sttId, 'pyannote-diarization', 'pyannote-wespeaker-voxceleb-resnet34-LM'];
     if (mods.includes('pii')) downloadModelIds.push('gliner-pii');
   }

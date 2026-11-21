@@ -22,6 +22,26 @@ from contextlib import contextmanager
 log = logging.getLogger(__name__)
 
 
+def ensure_ca_bundle():
+    """Give urllib a CA bundle on a Mac whose Python came without one.
+
+    python.org's Python ships its own OpenSSL and no certificates until its
+    "Install Certificates.command" is run; every urllib download then fails
+    with CERTIFICATE_VERIFY_FAILED. whisperx's alignment fetches NLTK's
+    punkt_tab that way when it is missing, and the failure turns alignment off
+    for the job (mac-bench, 2026-11-21). Onboarding puts punkt_tab in the venv;
+    this keeps the fallback fetch working too. Leaves a set SSL_CERT_FILE alone.
+    """
+    if sys.platform != 'darwin' or os.environ.get('SSL_CERT_FILE'):
+        return
+    try:
+        import certifi
+        os.environ['SSL_CERT_FILE'] = certifi.where()
+    except ImportError:
+        if os.path.isfile('/etc/ssl/cert.pem'):
+            os.environ['SSL_CERT_FILE'] = '/etc/ssl/cert.pem'
+
+
 def disable_model_telemetry():
     """Disable telemetry/analytics toggles for model libraries before imports."""
     os.environ['PYANNOTE_METRICS_ENABLED'] = 'false'

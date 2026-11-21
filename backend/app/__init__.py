@@ -55,6 +55,30 @@ def _disable_model_telemetry():
 _disable_model_telemetry()
 
 
+def _ensure_ca_bundle():
+    """Give urllib a CA bundle on a Mac whose Python came without one.
+
+    python.org's Python ships its own OpenSSL and no certificates until its
+    "Install Certificates.command" is run, so urllib downloads in this process
+    (the alignment-model preload through torch.hub) fail with
+    CERTIFICATE_VERIFY_FAILED. urllib builds its HTTPS context on the first
+    request and keeps it, so this has to run at import, before any request —
+    setting the variable later changes nothing (measured 2026-11-21).
+    Leaves a set SSL_CERT_FILE alone.
+    """
+    if sys.platform != 'darwin' or os.environ.get('SSL_CERT_FILE'):
+        return
+    try:
+        import certifi
+        os.environ['SSL_CERT_FILE'] = certifi.where()
+    except ImportError:
+        if os.path.isfile('/etc/ssl/cert.pem'):
+            os.environ['SSL_CERT_FILE'] = '/etc/ssl/cert.pem'
+
+
+_ensure_ca_bundle()
+
+
 def _configure_logging_legacy():
     """Send app INFO logs (e.g. PERF: lines in transcription) to stderr.
 

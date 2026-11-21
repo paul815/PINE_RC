@@ -114,3 +114,12 @@ class EngineAdapter(ABC):
     @abstractmethod
     def transcribe(self, audio_path, total_duration, language, ctx: TranscribeContext) -> TranscribeOutput:
         """Transcribe the recording, chunking long audio internally."""
+
+    def release(self):
+        """Hand memory back after a recording; the next job brings it back.
+
+        Called once per job, after it ends however it ends. The default keeps
+        everything resident; an engine that holds a GPU the rest of the machine
+        shares (Metal) overrides it.
+        """
+        return None

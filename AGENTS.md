@@ -11,8 +11,8 @@ Last updated: 2026-08-27.
 
 PINE (Private Interview & Notes Environment) is a fully local, offline Flask
 desktop web app for product researchers. Audio and transcripts are processed on
-the user's machine; nothing leaves the PC. Speech-to-text is WhisperX (mlx-whisper
-on Apple Silicon), speaker diarization is pyannote.
+the user's machine; nothing leaves the PC. Speech-to-text is WhisperX (on Apple
+Silicon through CTranslate2's Metal backend), speaker diarization is pyannote.
 
 The top engineering goal is data integrity for research assets:
 
@@ -134,7 +134,7 @@ backend/
                   # launcher_layout, pip_installer, annotations, multitrack_ingest, pii,
                   # backup, system_check, ffmpeg_setup, transcript_format
   ml_worker/      # ML process. torch/whisperx/pyannote/mlx live only here
-    engines/      # whisperx_engine (CUDA/CPU), mlx_engine (Apple Silicon), behind base.py
+    engines/      # whisperx_engine (CUDA/Metal/CPU); mlx_engine retired on the Mac (unused), behind base.py
   templates/      # main, recording, tags, settings, onboarding
   scripts/        # check_mojibake.py, check_line_endings.py, build_cyrillic_fonts.py
   data/           # pine.db (created at runtime)
@@ -189,9 +189,9 @@ quietly undoes the split.
   Required: pyannote-diarization, pyannote-segmentation, one transcription model.
   Optional: gliner-pii, offered during onboarding and installable or removable
   from Settings afterwards
-- **One transcription model per platform:** `whisperx-large-v3`
-  (`mlx-whisper-large-v3` on Mac). `supported_stt_models()` lists what a platform
-  may offer; `normalize_stt_model_id()` rejects the rest
+- **One transcription model on every platform:** `whisperx-large-v3` — on a Mac it
+  runs on Metal (CTranslate2 4.9+), CPU int8 without it. The retired
+  `mlx-whisper-large-v3` id maps onto it; `normalize_stt_model_id()` rejects the rest
 - Heavy ML deps are **not** in `requirements.txt` — `pip_installer.py` installs
   them at download time
 - Models come from HuggingFace Hub during onboarding; pyannote needs an HF token,

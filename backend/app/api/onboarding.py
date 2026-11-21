@@ -159,7 +159,7 @@ def device_status():
                 'has_nvidia_gpu': False,
                 'has_cuda': False,
                 'warnings': [],
-                'message': 'Apple Silicon detected — using Metal acceleration via mlx-whisper',
+                'message': 'Apple Silicon detected — using Metal acceleration via WhisperX',
             })
         nvidia_gpu = _detect_nvidia_gpu()
         if nvidia_gpu:

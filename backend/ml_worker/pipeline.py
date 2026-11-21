@@ -435,6 +435,17 @@ class MLPipeline:
                              pipeline_t0, total_duration)
         finally:
             progress.stop()
+            self._release_engine()
+
+    def _release_engine(self):
+        """Let the engine hand memory back between jobs; never fails a job."""
+        engine = self._engine
+        if engine is None:
+            return
+        try:
+            engine.release()
+        except Exception:  # noqa: BLE001 — the transcript is already made
+            log.warning('Engine release after the job failed', exc_info=True)
 
     def _run(self, env, job, events, progress, pipeline_t0, total_duration):
         recording_id = job.recording_id

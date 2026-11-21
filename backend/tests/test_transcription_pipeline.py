@@ -7,6 +7,7 @@ target whichever side owns the logic.
 """
 
 import os
+import sys
 from collections import namedtuple
 from unittest.mock import MagicMock, patch
 
@@ -1491,6 +1492,182 @@ class TestDecodeBatchSize:
         driver.assert_not_called()
 
 
+class TestMetal:
+    """WhisperX on Apple Silicon's GPU, through CTranslate2's Metal backend (4.9+).
+
+    mac-bench, 2026-11-21 (M4 Pro, 24 GB, 88-min Russian interview): 99.9% of
+    words as on Windows; batch 32 no faster than 16; alignment grew 27->42->55s
+    per chunk until the MPS cache was handed back; the idle worker held 15 GB.
+    """
+
+    @staticmethod
+    def _engine(device='mps'):
+        from ml_worker.engines.whisperx_engine import WhisperXEngine
+        eng = WhisperXEngine(env=None)
+        eng._device = device
+        return eng
+
+    @pytest.mark.parametrize('platform, version, count, expected', [
+        ('darwin', '4.9.0', 1, True),
+        ('darwin', '4.10.2', 1, True),
+        ('darwin', '4.8.1', 1, False),
+        ('darwin', '4.9.0', 0, False),
+        ('win32', '4.9.0', 1, False),
+    ])
+    def test_metal_needs_ctranslate2_4_9_and_a_device(self, platform, version, count, expected):
+        from ml_worker.engines import whisperx_engine as wx
+        fake = MagicMock(__version__=version, get_mps_device_count=MagicMock(return_value=count))
+        with patch.object(wx, '_ct2_metal', None), \
+                patch.object(wx.sys, 'platform', platform), \
+                patch.dict('sys.modules', {'ctranslate2': fake}):
+            assert wx.ct2_metal_available() is expected
+
+    def test_mac_device_is_metal_float16_or_cpu_int8(self):
+        from ml_worker.engines import whisperx_engine as wx
+        with patch.object(wx, 'ct2_metal_available', return_value=True):
+            assert wx.detect_mac_device() == ('mps', 'float16')
+        with patch.object(wx, 'ct2_metal_available', return_value=False):
+            assert wx.detect_mac_device() == ('cpu', 'int8')
+
+    def test_metal_that_will_not_load_falls_back_to_cpu(self):
+        eng = self._engine()
+        eng._compute_type = 'float16'
+        eng.env = MagicMock(model_dir='/models/whisperx-large-v3')
+        calls = []
+
+        def load_model(model_dir, device, compute_type=None):
+            calls.append((device, compute_type))
+            if device == 'mps':
+                raise RuntimeError('Metal device not supported')
+            return MagicMock()
+
+        with patch.dict('sys.modules', {'whisperx': MagicMock(load_model=load_model)}):
+            eng.load()
+        assert calls == [('mps', 'float16'), ('cpu', 'int8')]
+        assert (eng._device, eng._compute_type) == ('cpu', 'int8')
+
+    @pytest.mark.parametrize('ram_gb, batch', [(48, 16), (24, 16), (18, 16), (16, 8), (8, 8)])
+    def test_batch_follows_the_macs_ram(self, ram_gb, batch):
+        eng = self._engine()
+        vm = MagicMock(total=ram_gb * 1024 ** 3)
+        with patch.dict('sys.modules', {'psutil': MagicMock(virtual_memory=MagicMock(return_value=vm))}), \
+                patch('ml_worker.engines.whisperx_engine.driver_free_vram_gb') as driver:
+            assert eng._pick_batch_size() == batch
+        driver.assert_not_called()
+
+    @pytest.mark.parametrize('message, device, oom', [
+        ('CUDA out of memory. Tried to allocate 2 GiB', 'cuda', True),
+        ('failed to allocate buffer', 'cuda', False),     # CUDA keeps its one test
+        ('MPS backend out of memory (MPS allocated: 18 GB)', 'mps', True),
+        ('Failed to allocate Metal buffer of 2147483648 bytes', 'mps', True),
+        ('Insufficient Memory (kIOGPUCommandBufferCallbackErrorOutOfMemory)', 'mps', True),
+        ('aten::_ctc_loss is not implemented for MPS', 'mps', False),
+    ])
+    def test_what_counts_as_out_of_memory(self, message, device, oom):
+        from ml_worker.engines.whisperx_engine import _is_out_of_memory
+        assert _is_out_of_memory(RuntimeError(message), device) is oom
+
+    def test_metal_oom_halves_the_batch(self):
+        eng = self._engine()
+        batches = []
+
+        def transcribe(audio, **kwargs):
+            batches.append(kwargs['batch_size'])
+            if len(batches) == 1:
+                raise RuntimeError('MPS backend out of memory (MPS allocated: 18 GB)')
+            return {'segments': []}
+
+        eng._model = MagicMock(transcribe=transcribe)
+        fake_torch = MagicMock()
+        with patch.dict('sys.modules', {'torch': fake_torch}), \
+                patch.object(eng, '_pick_batch_size', return_value=16):
+            assert eng._transcribe_with_oom_retry(object()) == {'segments': []}
+        assert batches == [16, 8]
+        fake_torch.mps.empty_cache.assert_called()
+        fake_torch.cuda.empty_cache.assert_not_called()
+
+    def test_metal_aligns_on_the_cpu_and_hands_the_mps_cache_back(self):
+        """wav2vec2 on MPS drove a 30-min chunk to 17.6 GB of Metal memory and
+        kept 12.5 GB of it; the next chunk then ran out (2026-11-21)."""
+        from ml_worker.engines.base import TranscribeContext
+
+        eng, seen, patches = TestAlignModelParking._harness('mps')
+        with patches[0], patches[1], patches[2]:
+            fake_torch = sys.modules['torch']
+            eng.transcribe('rec.wav', 2000, None, TranscribeContext())
+
+        assert seen['decode'] == [None, 'cpu']
+        assert seen['align'] == ['cpu', 'cpu']
+        assert eng._cached_align_model.device == 'cpu'
+        assert eng._cached_align_model.moves == ['cpu', 'cpu']   # parked, never sent to MPS
+        fake_torch.mps.empty_cache.assert_called()
+        fake_torch.cuda.empty_cache.assert_not_called()
+
+    def test_alignment_failure_propagates_to_the_caller(self):
+        class FakeWhisperX:
+            @staticmethod
+            def load_align_model(language_code, device, model_name=None):
+                return MagicMock(), {'language': language_code}
+
+            @staticmethod
+            def align(segments, model, metadata, audio, device, return_char_alignments=False):
+                raise NotImplementedError('op not implemented')
+
+        for device in ('mps', 'cuda'):
+            eng = self._engine(device)
+            with patch.dict('sys.modules', {'torch': MagicMock()}), \
+                    pytest.raises(NotImplementedError):
+                eng._align(FakeWhisperX, [{'text': 'а'}], 'ru', object())
+
+    def test_release_takes_whisper_off_metal_and_the_next_job_puts_it_back(self):
+        eng = self._engine()
+        ct2 = MagicMock(model_is_loaded=True)
+        eng._model = MagicMock()
+        eng._model.model.model = ct2
+        fake_torch = MagicMock()
+        with patch.dict('sys.modules', {'torch': fake_torch}):
+            eng.release()
+        ct2.unload_model.assert_called_once()
+        fake_torch.mps.empty_cache.assert_called()
+
+        ct2.model_is_loaded = False
+        eng._ensure_resident()
+        ct2.load_model.assert_called_once()
+
+    @pytest.mark.parametrize('device', ['cuda', 'cpu'])
+    def test_release_changes_nothing_off_metal(self, device):
+        eng = self._engine(device)
+        ct2 = MagicMock(model_is_loaded=True)
+        eng._model = MagicMock()
+        eng._model.model.model = ct2
+        fake_torch = MagicMock()
+        with patch.dict('sys.modules', {'torch': fake_torch}):
+            eng.release()
+        ct2.unload_model.assert_not_called()
+        fake_torch.mps.empty_cache.assert_not_called()
+        fake_torch.cuda.empty_cache.assert_not_called()
+
+    def test_pipeline_releases_the_engine_after_every_job(self):
+        from ml_worker import pipeline as P
+        pl = P.MLPipeline()
+        pl._engine = MagicMock()
+        env = MagicMock(hf_offline=False, progress_scale=1.0)
+        job = MagicMock(tracks=None, audio_path='rec.wav')
+        with patch.object(P, 'get_duration_secs', return_value=60.0), \
+                patch.object(P, 'ProgressMapper'), \
+                patch.object(P.compat, 'apply_hf_offline'), \
+                patch.object(P.MLPipeline, '_run', side_effect=ValueError('job failed')), \
+                pytest.raises(ValueError):
+            pl.run(env, job, P.PipelineEvents())
+        pl._engine.release.assert_called_once()
+
+    def test_a_failing_release_never_fails_the_job(self):
+        from ml_worker import pipeline as P
+        pl = P.MLPipeline()
+        pl._engine = MagicMock(release=MagicMock(side_effect=RuntimeError('metal')))
+        pl._release_engine()
+
+
 class TestDriverFreeVram:
     """nvidia-smi parsing — matched by UUID, so CUDA_VISIBLE_DEVICES cannot mix up cards."""
 
@@ -2023,20 +2200,32 @@ class TestClearMlxCache:
 # ---------------------------------------------------------------------------
 
 class TestMacModelChoice:
-    """get_models_for_setup should select the quality model on Mac."""
+    """The Mac downloads and runs the Windows model, on Metal.
+
+    mac-bench, 2026-11-21 (88-min interview, M4 Pro): WhisperX on Metal matched
+    the Windows transcript in 99.9% of words; mlx-whisper, the Mac's model
+    until then, in 94.4% with 8 holes. mlx is retired on the Mac.
+    """
 
     @patch('app.services.model_manager.IS_MAC', True)
     def test_model_on_mac(self):
         from app.services.model_manager import get_models_for_setup
         ids = get_models_for_setup(modules=[])
-        assert 'mlx-whisper-large-v3' in ids
+        assert 'whisperx-large-v3' in ids
+        assert 'mlx-whisper-large-v3' not in ids
 
     @patch('app.services.model_manager.IS_MAC', True)
-    def test_normalize_rewrites_whisperx_to_mlx_on_mac(self):
-        """WhisperX is never installed on Mac, so the ID must not survive."""
+    def test_normalize_maps_the_retired_mlx_ids_to_whisperx_on_mac(self):
         from app.services.model_manager import normalize_stt_model_id
-        assert normalize_stt_model_id('whisperx-large-v3') == 'mlx-whisper-large-v3'
-        assert normalize_stt_model_id('mlx-whisper-large-v3') == 'mlx-whisper-large-v3'
+        assert normalize_stt_model_id('whisperx-large-v3') == 'whisperx-large-v3'
+        assert normalize_stt_model_id('mlx-whisper-large-v3') == 'whisperx-large-v3'
+        assert normalize_stt_model_id('mlx-whisper-large-v3-turbo') == 'whisperx-large-v3'
+
+    @patch('app.services.model_manager.IS_MAC', True)
+    def test_whisperx_model_is_registered_on_mac_and_mlx_is_gone(self):
+        from app.services.model_manager import MODEL_REGISTRY, _model_for_platform
+        assert _model_for_platform(MODEL_REGISTRY['whisperx-large-v3'])
+        assert 'mlx-whisper-large-v3' not in MODEL_REGISTRY
 
     @patch('app.services.model_manager.IS_MAC', False)
     def test_normalize_rewrites_mlx_to_whisperx_off_mac(self):
@@ -2050,12 +2239,94 @@ class TestMacModelChoice:
 
     @patch('app.services.pip_installer.IS_MAC', True)
     @patch('app.services.pip_installer._is_package_installed')
-    def test_check_ml_deps_never_asks_for_whisperx_on_mac(self, mock_is_installed):
+    def test_check_ml_deps_asks_for_whisperx_on_mac(self, mock_is_installed):
         from app.services.pip_installer import check_ml_deps
         mock_is_installed.return_value = False
         deps = check_ml_deps()
-        assert 'whisperx' not in deps
-        assert 'mlx-whisper' in deps
+        assert 'whisperx' in deps
+        assert 'mlx-whisper' not in deps
+
+    @pytest.mark.skipif(sys.platform != 'darwin', reason='the install list is chosen at import')
+    def test_mac_installs_the_measured_stack(self):
+        from app.services.pip_installer import PIP_INSTALL_TARGETS, _pinned
+        for spec in ('ctranslate2==4.9.0', 'whisperx==3.8.6', 'faster-whisper==1.2.1',
+                     'torch==2.8.0', 'pyannote-audio==4.0.7'):
+            assert spec in PIP_INSTALL_TARGETS
+        assert not any(t.startswith('mlx') for t in PIP_INSTALL_TARGETS)
+        assert _pinned('whisperx') == 'whisperx==3.8.6'
+        assert _pinned('not-pinned') == 'not-pinned'
+
+
+class TestNltkPunkt:
+    """whisperx's alignment needs NLTK's punkt_tab and fetches it through urllib.
+
+    On a Mac with python.org's Python (no CA bundle) that fetch failed with
+    CERTIFICATE_VERIFY_FAILED and the job ran without word timestamps
+    (mac-bench, 2026-11-21). Onboarding fetches it with certifi's bundle.
+    """
+
+    def test_present_means_no_download(self, tmp_path, monkeypatch):
+        from app.services import pip_installer as pi
+        (tmp_path / 'tokenizers' / 'punkt_tab').mkdir(parents=True)
+        monkeypatch.setattr(pi, '_nltk_data_dir', lambda: str(tmp_path))
+        with patch.object(pi.subprocess, 'run') as run:
+            assert pi.ensure_nltk_punkt() is True
+        run.assert_not_called()
+
+    def test_download_carries_a_ca_bundle(self, tmp_path, monkeypatch):
+        from app.services import pip_installer as pi
+        monkeypatch.setattr(pi, '_nltk_data_dir', lambda: str(tmp_path))
+        monkeypatch.delenv('PINE_TESTING', raising=False)
+        monkeypatch.delenv('SSL_CERT_FILE', raising=False)
+        seen = {}
+
+        def fake_run(cmd, env=None, **kwargs):
+            seen['cmd'], seen['env'] = cmd, env
+            (tmp_path / 'tokenizers' / 'punkt_tab').mkdir(parents=True)
+            return MagicMock(returncode=0)
+
+        monkeypatch.setattr(pi.subprocess, 'run', fake_run)
+        assert pi.ensure_nltk_punkt() is True
+        assert seen['cmd'][-1] == str(tmp_path)
+        assert seen['env'].get('SSL_CERT_FILE')
+
+    def test_failed_download_is_reported_not_raised(self, tmp_path, monkeypatch):
+        import subprocess
+
+        from app.services import pip_installer as pi
+        monkeypatch.setattr(pi, '_nltk_data_dir', lambda: str(tmp_path))
+        monkeypatch.delenv('PINE_TESTING', raising=False)
+
+        def fake_run(cmd, **kwargs):
+            raise subprocess.CalledProcessError(1, cmd, stderr='CERTIFICATE_VERIFY_FAILED')
+
+        monkeypatch.setattr(pi.subprocess, 'run', fake_run)
+        assert pi.ensure_nltk_punkt() is False
+
+    def test_worker_gets_a_ca_bundle_on_a_mac(self, monkeypatch):
+        from ml_worker import compat
+        monkeypatch.setenv('SSL_CERT_FILE', '')
+        monkeypatch.setattr(compat.sys, 'platform', 'darwin')
+        compat.ensure_ca_bundle()
+        assert os.environ['SSL_CERT_FILE']
+
+    def test_web_process_gets_a_ca_bundle_on_a_mac(self, monkeypatch):
+        """The alignment preload in onboarding failed with CERTIFICATE_VERIFY_FAILED
+        when the bundle was set only just before it: urllib keeps the HTTPS
+        context of its first request (2026-11-21). So it is set at import."""
+        import app
+        monkeypatch.setenv('SSL_CERT_FILE', '')
+        monkeypatch.setattr(app.sys, 'platform', 'darwin')
+        app._ensure_ca_bundle()
+        assert os.environ['SSL_CERT_FILE']
+
+    @pytest.mark.parametrize('platform, preset', [('win32', ''), ('darwin', '/own/bundle.pem')])
+    def test_worker_bundle_left_alone(self, monkeypatch, platform, preset):
+        from ml_worker import compat
+        monkeypatch.setenv('SSL_CERT_FILE', preset)
+        monkeypatch.setattr(compat.sys, 'platform', platform)
+        compat.ensure_ca_bundle()
+        assert os.environ['SSL_CERT_FILE'] == preset
 
 
 class TestEngineSelection:
@@ -2083,16 +2354,32 @@ class TestEngineSelection:
         assert device == 'cpu'
         assert compute_type is None
 
-    def test_whisperx_on_mac_prefers_cpu_int8(self):
+    def test_whisperx_on_mac_runs_on_metal_in_float16(self):
         from ml_worker.engines import select_engine_config
 
         engine, device, compute_type = select_engine_config(
             'whisperx-large-v3', prefer_mps=True,
-            detected_device='cuda', detected_compute='float16')
+            detected_device='cuda', detected_compute='float16', metal=True)
 
-        assert engine == 'whisperx'
-        assert device == 'cpu'
-        assert compute_type == 'int8'
+        assert (engine, device, compute_type) == ('whisperx', 'mps', 'float16')
+
+    def test_whisperx_on_mac_without_metal_is_cpu_int8(self):
+        from ml_worker.engines import select_engine_config
+
+        engine, device, compute_type = select_engine_config(
+            'whisperx-large-v3', prefer_mps=True,
+            detected_device='cuda', detected_compute='float16', metal=False)
+
+        assert (engine, device, compute_type) == ('whisperx', 'cpu', 'int8')
+
+    @pytest.mark.parametrize('metal, expected', [(True, ('mps', 'float16')),
+                                                 (False, ('cpu', 'int8'))])
+    def test_create_engine_on_mac(self, metal, expected):
+        from ml_worker.engines import create_engine
+        env = MagicMock(stt_model_id='whisperx-large-v3')
+        with patch('ml_worker.engines.whisperx_engine.ct2_metal_available', return_value=metal):
+            engine = create_engine(env, prefer_mps=True)
+        assert (engine._device, engine._compute_type) == expected
 
 
 # ---------------------------------------------------------------------------

@@ -1,8 +1,10 @@
 """WhisperX engine: faster-whisper decode + wav2vec2 forced alignment.
 
-Runs on CUDA (float16, int8 below 6 GB VRAM) or CPU (int8). CTranslate2 has
-no MPS backend, so on Apple Silicon this engine runs on CPU — the MLX engine
-is the preferred Mac path.
+Runs on CUDA (float16, int8 below 6 GB VRAM), on Apple Silicon's GPU through
+CTranslate2's Metal backend (float16, CTranslate2 4.9+), or on the CPU (int8).
+The Mac uses the same engine and model as Windows: measured 2026-11-21 on an
+88-min Russian interview (M4 Pro, 24 GB), it matched the Windows transcript
+in 99.9% of words in ~1000s for the whole pipeline (mac-bench).
 """
 
 import contextlib
@@ -10,6 +12,7 @@ import gc
 import logging
 import os
 import subprocess
+import sys
 import threading
 import time
 
@@ -77,6 +80,21 @@ def cap_ct2_allocator():
     log.info('CT2 caching allocator capped at %s', CT2_ALLOCATOR_CONFIG)
 
 
+def _is_out_of_memory(exc, device):
+    """Whether ``exc`` is the GPU running out of memory.
+
+    'out of memory' is the test this path has always used on CUDA, and also
+    what torch says on Metal ('MPS backend out of memory'). What CTranslate2's
+    Metal backend raises on a full GPU was never seen in testing, so on Metal
+    the usual allocation-failure wordings count too.
+    """
+    msg = str(exc).lower()
+    if 'out of memory' in msg:
+        return True
+    return device == 'mps' and any(
+        k in msg for k in ('insufficient memory', 'failed to allocate', 'could not allocate'))
+
+
 def free_vram_gb():
     """Free VRAM in GB, or None off CUDA."""
     try:
@@ -125,8 +143,54 @@ def driver_free_vram_gb():
     return parse_nvidia_smi_free_gb(out, uuid)
 
 
+#: CTranslate2 gained a Metal backend in 4.9 (released 2026-11-10).
+CT2_METAL_MIN_VERSION = (4, 9)
+_ct2_metal = None
+
+
+def ct2_metal_available():
+    """True when CTranslate2 can run Whisper on this Mac's GPU (Metal).
+
+    A version check and a device count — no model load, cached for the life of
+    the worker, never raises. A Mac where Metal fails anyway (an older macOS,
+    a chip the backend does not take) is caught when the model loads, in
+    WhisperXEngine.load(), and drops to the CPU there.
+    """
+    global _ct2_metal
+    if _ct2_metal is not None:
+        return _ct2_metal
+    ok = False
+    if sys.platform == 'darwin':
+        try:
+            import ctranslate2
+            version = tuple(int(p) for p in ctranslate2.__version__.split('.')[:2])
+            count = getattr(ctranslate2, 'get_mps_device_count', None)
+            ok = version >= CT2_METAL_MIN_VERSION and bool(count and count() > 0)
+        except Exception:  # noqa: BLE001 — a probe must never break a job
+            ok = False
+    _ct2_metal = ok
+    return ok
+
+
+def detect_mac_device():
+    """(device, compute_type) for whisperx on Apple Silicon.
+
+    float16 only: CTranslate2 resolves int8_float16 on Metal to float16 itself
+    ("native INT8 is slower" on current Apple GPUs), and bfloat16 decoded at
+    half the speed (mac-bench, 2026-11-21). Without Metal it is the CPU at
+    int8 — the same model, about 2.5x slower on an M4 Pro.
+    """
+    if ct2_metal_available():
+        log.info('Using Metal (CTranslate2), compute_type=float16')
+        return 'mps', 'float16'
+    log.info('No Metal backend in this CTranslate2 — using CPU with int8.')
+    return 'cpu', 'int8'
+
+
 def detect_torch_device():
     """Return (device, compute_type) for CTranslate2/whisperx on this machine."""
+    if sys.platform == 'darwin':
+        return detect_mac_device()
     try:
         import torch
         if torch.cuda.is_available():
@@ -240,15 +304,66 @@ class WhisperXEngine(EngineAdapter):
             cap_ct2_allocator()
         import whisperx
         log.info('Loading WhisperX model from %s ...', model_dir)
-        self._model = whisperx.load_model(
-            model_dir,
-            self._device,
-            compute_type=self._compute_type,
-        )
+        try:
+            self._model = whisperx.load_model(
+                model_dir,
+                self._device,
+                compute_type=self._compute_type,
+            )
+        except Exception as exc:
+            if self._device != 'mps':
+                raise
+            # CTranslate2 reported Metal but the model would not come up on it
+            # (an older macOS, a chip the backend does not take). Same model on
+            # the CPU: slower, same transcript.
+            log.warning('WhisperX on Metal failed to load (%s) — using CPU with int8', exc)
+            self._device, self._compute_type = 'cpu', 'int8'
+            self._model = whisperx.load_model(
+                model_dir,
+                self._device,
+                compute_type=self._compute_type,
+            )
         self._model_dir = model_dir
         log.info('WhisperX model loaded.')
 
+    def _ct2_model(self):
+        """The CTranslate2 Whisper under whisperx's pipeline, or None."""
+        # FasterWhisperPipeline.model -> faster_whisper.WhisperModel.model
+        return getattr(getattr(self._model, 'model', None), 'model', None)
+
+    def _ensure_resident(self):
+        """Put Whisper back on the GPU if ``release()`` took it off."""
+        ct2 = self._ct2_model()
+        if ct2 is not None and not getattr(ct2, 'model_is_loaded', True):
+            with _perf('model reload'):
+                ct2.load_model()
+
+    def release(self):
+        """Give unified memory back to the Mac between recordings (Metal only).
+
+        The worker lives between jobs, and on Metal it used to sit on 15 GB of
+        a 24 GB Mac while idle (mac-bench, 2026-11-21): Whisper 3.5 GB, the
+        rest alignment on MPS (since moved to the CPU, see MPS_ALIGN_DEVICE)
+        and torch's MPS cache. Whisper comes off the GPU here — 3.5 -> 0.6 GB,
+        0.1s — and goes back in ``_ensure_resident`` on the next job (~1s).
+        Nothing changes on CUDA or the CPU.
+        """
+        if self._device != 'mps':
+            return
+        self._park_align_model('release align park')
+        ct2 = self._ct2_model()
+        if ct2 is not None and getattr(ct2, 'model_is_loaded', False):
+            try:
+                with _perf('model unload'):
+                    ct2.unload_model()
+            except Exception as exc:  # noqa: BLE001 — keep the model rather than fail
+                log.warning('Could not take Whisper off Metal: %s', exc)
+        gc.collect()
+        import torch
+        torch.mps.empty_cache()
+
     def probe_language(self, audio_path, probe_audio):
+        self._ensure_resident()
         code, conf, options = probe_language_whisperx(self._model, probe_audio)
         return LanguageProbe(
             code=code,
@@ -268,7 +383,7 @@ class WhisperXEngine(EngineAdapter):
         if (self._cached_align_model is not None
                 and self._cached_align_language == language_code
                 and self._cached_align_device == device):
-            if device == 'cuda':
+            if device in ('cuda', 'mps'):
                 self._cached_align_model.to(device)  # back from RAM, see _park_align_model
             return self._cached_align_model, self._cached_align_metadata
         if self._cached_align_model is not None:
@@ -331,14 +446,44 @@ class WhisperXEngine(EngineAdapter):
         reload per chunk, each one reopening the Hugging Face network window
         and risking a transient failure that disables alignment for the rest
         of the worker's life (_failed_align_keys).
+
+        On Metal the align model lives on the CPU anyway (MPS_ALIGN_DEVICE);
+        what this buys there is torch's MPS cache — VAD and the rest — handed
+        back between chunks.
         """
-        if self._device != 'cuda' or self._cached_align_model is None:
+        if self._device not in ('cuda', 'mps') or self._cached_align_model is None:
             return
         with _perf(label):
             self._cached_align_model.to('cpu')
             gc.collect()
             import torch
-            torch.cuda.empty_cache()
+            if self._device == 'cuda':
+                torch.cuda.empty_cache()
+            else:
+                torch.mps.empty_cache()
+
+    # On a Mac, wav2vec2 aligns on the CPU while Whisper decodes on Metal.
+    # Measured 2026-11-21 on one 30-min chunk of the 88-min recording (M4 Pro,
+    # 24 GB): on MPS it took 29s but drove torch's Metal allocations to 17.6 GB
+    # and kept 12.5 GB of them after the model was dropped and the cache
+    # emptied; a second pass took 48s. Through PINE the second chunk's
+    # alignment then ran out of memory ('other allocations: 25 GiB'). On the
+    # CPU the same chunk took 50s for the same 4010 words — about 40s more
+    # per 88 minutes, against a GPU left to Whisper and pyannote (mac-bench).
+    MPS_ALIGN_DEVICE = 'cpu'
+
+    def _align(self, whisperx, segments, language, audio, label=''):
+        """wav2vec2 alignment: on the engine's device, or the CPU beside Metal.
+
+        ``label`` prefixes the PERF lines ('chunk 2 ' -> 'chunk 2 align').
+        Failures propagate, for the caller to turn alignment off as before.
+        """
+        device = self.MPS_ALIGN_DEVICE if self._device == 'mps' else self._device
+        with _perf(f'{label}align model'):
+            model_a, metadata = self._get_align_model(whisperx, language, device)
+        with _perf(f'{label}align'):
+            return whisperx.align(segments, model_a, metadata, audio,
+                                  device, return_char_alignments=False)
 
     # ── decoding ──
 
@@ -351,6 +496,27 @@ class WhisperXEngine(EngineAdapter):
     # words either way.
     BATCH_SIZE_BY_FREE_GB = ((7.0, 16), (4.5, 8), (2.6, 4))
 
+    # Metal, measured 2026-11-21 (M4 Pro, 24 GB, the 88-min recording): batch 16
+    # decoded it in 658s, 32 in 671s — the GPU is full at 16, and the text
+    # differed in 2 of 11.8k words. The GPU draws on the Mac's own RAM, so a
+    # machine of 16 GB or less starts at 8. That one is not measured; the
+    # halving in _transcribe_with_oom_retry is what stands behind it.
+    MPS_BATCH_SIZE = 16
+    MPS_BATCH_SIZE_SMALL_RAM = 8
+    MPS_SMALL_RAM_GB = 16.5
+
+    def _mps_batch_size(self):
+        try:
+            import psutil
+            ram_gb = psutil.virtual_memory().total / (1024 ** 3)
+        except Exception:  # noqa: BLE001 — diagnostics must never break a job
+            ram_gb = None
+        small = ram_gb is not None and ram_gb <= self.MPS_SMALL_RAM_GB
+        size = self.MPS_BATCH_SIZE_SMALL_RAM if small else self.MPS_BATCH_SIZE
+        log.info('Decoding on Metal with batch_size=%d (%s GB RAM)', size,
+                 '?' if ram_gb is None else f'{ram_gb:.0f}')
+        return size
+
     def _pick_batch_size(self):
         """Start from the batch the free VRAM actually supports.
 
@@ -358,6 +524,8 @@ class WhisperXEngine(EngineAdapter):
         path below never runs — so the batch has to fit up front, judged by
         what the driver reports rather than torch's inflated budget.
         """
+        if self._device == 'mps':
+            return self._mps_batch_size()
         if self._device != 'cuda':
             return 4
         free_gb, source = driver_free_vram_gb(), 'driver'
@@ -375,7 +543,8 @@ class WhisperXEngine(EngineAdapter):
         return 2
 
     def _transcribe_with_oom_retry(self, audio, language=None):
-        """Transcribe with automatic batch_size halving on CUDA OOM."""
+        """Transcribe with automatic batch_size halving on CUDA or Metal OOM."""
+        self._ensure_resident()
         batch_size = self._pick_batch_size()
         min_batch = 2
 
@@ -386,14 +555,17 @@ class WhisperXEngine(EngineAdapter):
             try:
                 return self._model.transcribe(audio, **tx_kw)
             except RuntimeError as exc:
-                if ('out of memory' in str(exc).lower()
-                        and self._device == 'cuda'
+                if (_is_out_of_memory(exc, self._device)
+                        and self._device in ('cuda', 'mps')
                         and batch_size > min_batch):
                     log.warning(
-                        'CUDA OOM with batch_size=%d — halving and retrying',
-                        batch_size)
+                        '%s OOM with batch_size=%d — halving and retrying',
+                        'CUDA' if self._device == 'cuda' else 'Metal', batch_size)
                     import torch
-                    torch.cuda.empty_cache()
+                    if self._device == 'cuda':
+                        torch.cuda.empty_cache()
+                    else:
+                        torch.mps.empty_cache()
                     gc.collect()
                     batch_size = batch_size // 2
                 else:
@@ -459,13 +631,8 @@ class WhisperXEngine(EngineAdapter):
             # Align (cached align model, reused across chunks and recordings)
             if align_enabled:
                 try:
-                    with _perf(f'chunk {i + 1} align model'):
-                        model_a, metadata = self._get_align_model(
-                            whisperx, detected_lang, self._device)
-                    with _perf(f'chunk {i + 1} align'):
-                        result = whisperx.align(
-                            result['segments'], model_a, metadata, chunk_audio,
-                            self._device, return_char_alignments=False)
+                    result = self._align(whisperx, result['segments'], detected_lang,
+                                         chunk_audio, f'chunk {i + 1} ')
                 except Exception as exc:
                     align_enabled = False
                     log.warning(
@@ -497,6 +664,9 @@ class WhisperXEngine(EngineAdapter):
             if self._device == 'cuda':
                 import torch
                 torch.cuda.empty_cache()
+            elif self._device == 'mps':
+                import torch
+                torch.mps.empty_cache()
             ctx.check_cancel()
 
         all_segments.sort(key=lambda s: s.get('start', 0))
@@ -541,13 +711,7 @@ class WhisperXEngine(EngineAdapter):
             detected_lang = language or result.get('language', 'en')
             ctx.on_status(stage='aligning', message='Aligning word timestamps...')
             try:
-                with _perf('align model'):
-                    model_a, metadata = self._get_align_model(
-                        whisperx, detected_lang, self._device)
-                with _perf('align'):
-                    result = whisperx.align(
-                        result['segments'], model_a, metadata, audio,
-                        self._device, return_char_alignments=False)
+                result = self._align(whisperx, result['segments'], detected_lang, audio)
             except Exception as exc:
                 log.warning('Alignment failed for lang=%s: %s - skipping', detected_lang, exc)
             finally:

@@ -168,7 +168,7 @@ def run_system_check(models_path=None):
             checks.append({
                 'name': 'GPU acceleration',
                 'status': 'ok',
-                'detail': f'{chip} \u00b7 Metal (MPS) acceleration via mlx-whisper',
+                'detail': f'{chip} \u00b7 Metal (MPS) acceleration via WhisperX',
                 'version': torch_ver,
             })
         elif chip:

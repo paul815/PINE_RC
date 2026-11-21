@@ -215,6 +215,7 @@ def main():
         import faulthandler
         faulthandler.dump_traceback_later(30, repeat=True, file=sys.stderr)
     compat.disable_model_telemetry()
+    compat.ensure_ca_bundle()
     log.info('ML worker starting (pid=%s, python=%s)', os.getpid(), sys.version.split()[0])
     WorkerServer().serve()
     log.info('ML worker exiting.')
