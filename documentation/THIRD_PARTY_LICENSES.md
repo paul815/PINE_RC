@@ -71,10 +71,10 @@ but they are part of what a user ends up running.
 |---|---|
 | torch, torchaudio | BSD-3-Clause |
 | faster-whisper | MIT |
+| ctranslate2 | MIT |
 | whisperx | BSD-2-Clause **(confirm)** |
 | pyannote.audio | MIT |
 | onnxruntime | MIT |
-| mlx-whisper (Apple Silicon only) | MIT **(confirm)** |
 | gliner (optional, PII) | Apache-2.0 **(confirm)** |
 
 ---
@@ -87,8 +87,7 @@ model card.
 
 | Model | Used for | Terms |
 |---|---|---|
-| [Systran/faster-whisper-large-v3](https://huggingface.co/Systran/faster-whisper-large-v3) | Transcription (Windows/Linux) | MIT — OpenAI Whisper weights |
-| [mlx-community/whisper-large-v3-mlx](https://huggingface.co/mlx-community/whisper-large-v3-mlx) | Transcription (Apple Silicon) | MIT — same weights, MLX conversion |
+| [Systran/faster-whisper-large-v3](https://huggingface.co/Systran/faster-whisper-large-v3) | Transcription | MIT — OpenAI Whisper weights |
 | [pyannote/speaker-diarization-community-1](https://huggingface.co/pyannote/speaker-diarization-community-1) | Diarization | Gated — you must accept the conditions on the model page with your own account **(confirm the license line)** |
 | [pyannote/wespeaker-voxceleb-resnet34-LM](https://huggingface.co/pyannote/wespeaker-voxceleb-resnet34-LM) | Speaker embeddings | **(confirm on the model card)** |
 | [urchade/gliner_multi_pii-v1](https://huggingface.co/urchade/gliner_multi_pii-v1) | Optional PII removal | Apache-2.0 **(confirm)** |

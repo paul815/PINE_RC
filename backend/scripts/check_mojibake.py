@@ -43,7 +43,6 @@ EXCLUDED_DIR_NAMES = {
     "models",
     "projects",
     "backups",
-    ".tmp_mlx_src",
     ".tmp_vox",
 }
 

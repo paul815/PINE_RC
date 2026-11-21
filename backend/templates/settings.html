@@ -1000,7 +1000,10 @@ async function saveExportPromptRecording() {
 // does about language.
 const STT_MODEL_NOTES = {
   'whisperx-large-v3': 'Runs on the GPU · 6.5 GB VRAM · you can set the language yourself',
-  'mlx-whisper-large-v3': 'Runs on the Neural Engine · you can set the language yourself',
+};
+// A Mac's GPU shares the machine's RAM, so there is no VRAM figure to quote.
+const STT_MODEL_NOTES_MAC = {
+  'whisperx-large-v3': 'Runs on the GPU through Metal · you can set the language yourself',
 };
 
 let _sttSocket = null;
@@ -1009,8 +1012,9 @@ let _sttPendingId = null;
 function renderSttModels() {
   const host = document.getElementById('sttModelList');
   if (!host) return;
+  const notes = settings.is_mac ? STT_MODEL_NOTES_MAC : STT_MODEL_NOTES;
   host.innerHTML = (settings.stt_models || []).map(m => {
-    const note = STT_MODEL_NOTES[m.id] || '';
+    const note = notes[m.id] || '';
     const action = m.installed
       ? '<span class="assistive-text">In use</span>'
       : `<button class="btn-outline" onclick="installSttModel(${escJsAttr(m.id)})">Install</button>`;

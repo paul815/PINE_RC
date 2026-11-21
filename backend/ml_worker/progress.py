@@ -44,8 +44,8 @@ from .constants import (
 
 log = logging.getLogger(__name__)
 
-# Global scale, in order. Stages the active engine never emits (MLX has no
-# separate 'aligning' pass) simply get skipped over.
+# Global scale, in order. Stages the active engine never emits (one without a
+# separate 'aligning' pass, say) simply get skipped over.
 STAGES = ('loading', 'transcribing', 'aligning', 'diarizing', 'finalizing')
 
 # Don't let the ticker run all the way to the end of a band — the real

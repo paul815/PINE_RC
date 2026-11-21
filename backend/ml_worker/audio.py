@@ -1,4 +1,4 @@
-"""Audio helpers: ffprobe/ffmpeg decode, WAV writing, MLX cache management."""
+"""Audio helpers: ffprobe/ffmpeg decode, WAV writing."""
 
 import subprocess
 
@@ -82,15 +82,6 @@ def write_wav(path, audio_f32, sample_rate=16000):
         f.write(b'data')
         f.write(struct.pack('<I', data_size))
         f.write(pcm.tobytes())
-
-
-def clear_mlx_cache():
-    """Release Metal GPU memory between processing stages (Apple Silicon only)."""
-    try:
-        import mlx.core as mx
-        mx.clear_cache()
-    except Exception:
-        pass
 
 
 def fmt_elapsed(secs):

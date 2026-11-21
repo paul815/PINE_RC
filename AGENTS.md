@@ -133,8 +133,8 @@ backend/
     services/     # transcription/ (job_runner + worker_client), export, model_manager,
                   # launcher_layout, pip_installer, annotations, multitrack_ingest, pii,
                   # backup, system_check, ffmpeg_setup, transcript_format
-  ml_worker/      # ML process. torch/whisperx/pyannote/mlx live only here
-    engines/      # whisperx_engine (CUDA/Metal/CPU); mlx_engine retired on the Mac (unused), behind base.py
+  ml_worker/      # ML process. torch/whisperx/pyannote live only here
+    engines/      # whisperx_engine (CUDA/Metal/CPU), behind base.py
   templates/      # main, recording, tags, settings, onboarding
   scripts/        # check_mojibake.py, check_line_endings.py, build_cyrillic_fonts.py
   data/           # pine.db (created at runtime)
@@ -157,7 +157,7 @@ two halves is a data-loss event, not a cosmetic bug.
 
 ### Process boundary
 
-`backend/app/` must **never** import `torch`, `whisperx`, `pyannote` or `mlx`.
+`backend/app/` must **never** import `torch`, `whisperx` or `pyannote`.
 Those belong to `backend/ml_worker/` alone, so a CUDA crash or an OOM kills the
 worker rather than the backend. An import across this line looks harmless and
 quietly undoes the split.

@@ -9,13 +9,15 @@ from .base import (  # noqa: F401 — re-exported interface
 )
 
 ENGINE_WHISPERX = 'whisperx'
-ENGINE_MLX = 'mlx'
 
 
 def engine_kind_for_model(stt_model_id: str) -> str:
-    """Map an installed STT model id to the engine that runs it."""
-    if (stt_model_id or '').strip().startswith('mlx-'):
-        return ENGINE_MLX
+    """Map an installed STT model id to the engine that runs it.
+
+    One engine on every platform: WhisperX. The Mac's retired
+    ``mlx-whisper-*`` ids never get this far — ``normalize_stt_model_id()``
+    maps them onto ``whisperx-large-v3`` before a job is built.
+    """
     return ENGINE_WHISPERX
 
 
@@ -29,8 +31,6 @@ def select_engine_config(stt_model_id: str, prefer_mps: bool,
     the choice is stable across calls. ``metal`` says whether CTranslate2 can
     use this Mac's GPU; None asks ``ct2_metal_available()``.
     """
-    if engine_kind_for_model(stt_model_id) == ENGINE_MLX:
-        return ENGINE_MLX, 'cpu', None
     compute_type = 'int8'
     if prefer_mps:
         # Apple Silicon: CTranslate2 4.9+ runs on Metal (float16 only — see
@@ -48,19 +48,12 @@ def select_engine_config(stt_model_id: str, prefer_mps: bool,
 
 def engine_capabilities(stt_model_id: str) -> EngineCapabilities:
     """Capabilities of the engine that would run this model (no ML imports)."""
-    from .mlx_engine import MlxWhisperEngine
     from .whisperx_engine import WhisperXEngine
-    if engine_kind_for_model(stt_model_id) == ENGINE_MLX:
-        return MlxWhisperEngine.capabilities
     return WhisperXEngine.capabilities
 
 
 def create_engine(env, prefer_mps: bool = False) -> EngineAdapter:
     """Construct (but do not load) the adapter for ``env.stt_model_id``."""
-    kind = engine_kind_for_model(env.stt_model_id)
-    if kind == ENGINE_MLX:
-        from .mlx_engine import MlxWhisperEngine
-        return MlxWhisperEngine(env)
     from .whisperx_engine import WhisperXEngine, detect_mac_device, detect_torch_device
     engine = WhisperXEngine(env)
     if prefer_mps:

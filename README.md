@@ -53,7 +53,7 @@ Upload an interview, get a speaker-separated transcript, code it, and export som
 
 **Transcription**
 
-- Whisper large-v3 (NVIDIA GPU, or Apple Silicon via MLX), with the language set by hand or auto-detected
+- Whisper large-v3 (NVIDIA GPU, or the Apple Silicon GPU through Metal), with the language set by hand or auto-detected
 - pyannote speaker diarization, running in parallel with transcription rather than after it
 - Per-speaker tracks for Zoom meeting folders and multi-channel files — no diarization needed
 - Chunking for long files, crash recovery for interrupted jobs, live progress over WebSocket with a learned ETA
@@ -92,7 +92,7 @@ Upload an interview, get a speaker-separated transcript, code it, and export som
 | **Python** | 3.11, 3.12 or 3.13 | The installers find it themselves |
 | **Disk** | 12 GB free | Checked during setup. Models ~3.1 GB, ML packages take the rest |
 | **RAM** | 10 GB recommended | Setup warns below that |
-| **GPU** | Optional, but strongly recommended | Without one transcription is roughly 10x slower. NVIDIA + CUDA is the fast path; 4 GB VRAM or less gets a warning. Apple Silicon uses MLX. No GPU means CPU fallback |
+| **GPU** | Optional, but strongly recommended | Without one transcription is roughly 10x slower. NVIDIA + CUDA is the fast path; 4 GB VRAM or less gets a warning. Apple Silicon runs on its GPU through Metal. No GPU means CPU fallback |
 | **HuggingFace account** | Required | Free. Needed to accept the pyannote licence and download models |
 
 Extra download on demand: PII model +1.8 GB.
@@ -103,7 +103,7 @@ Extra download on demand: PII model +1.8 GB.
 |---|---|
 | Windows + NVIDIA GPU | Supported — primary target |
 | Windows, no GPU | Supported — CPU fallback, roughly 10x slower |
-| macOS, Apple Silicon | Supported — Whisper via MLX on the Metal GPU |
+| macOS, Apple Silicon | Supported — the same WhisperX as on Windows, on the GPU through Metal |
 | macOS, Intel | Works, CPU only |
 | Windows + AMD GPU | Falls back to CPU (ROCm not wired up) |
 | Linux | Experimental — `Setup_MAC.command` sets it up, but it opens the browser with the macOS `open` command; start the app by hand |
@@ -230,7 +230,7 @@ Recordings and transcripts **never** leave your machine. The app does open outbo
 | Checking the HF token | HuggingFace API | Validates the token when you save it |
 | Check for updates | `api.github.com` | Only when you press the button in Settings |
 | Optional PII model | HuggingFace | Only if you install GLiNER |
-| WhisperX word alignment (Windows/Linux) | HuggingFace Hub | Transcription normally runs with the Hub offline. For each **new** language WhisperX downloads a wav2vec2 alignment model once; the app allows the Hub only for that download, then goes offline again. Apple Silicon uses MLX and never takes this path |
+| WhisperX word alignment | HuggingFace Hub | Transcription normally runs with the Hub offline. For each **new** language WhisperX downloads a wav2vec2 alignment model once; the app allows the Hub only for that download, then goes offline again |
 
 Set `PINE_ALLOW_HF_NETWORK=1` to skip Hub offline mode entirely. Not needed for normal use.
 
@@ -293,7 +293,7 @@ flowchart LR
     B --> DB[("SQLite<br/>pine.db")]
     B --> FS["projects/<br/>transcripts + annotations JSON"]
     B <-->|JSON over a pipe| W["ml_worker process<br/>models load only here"]
-    W --> ASR["WhisperX / MLX"]
+    W --> ASR["WhisperX<br/>CUDA / Metal / CPU"]
     W --> DIA["pyannote diarization"]
 ```
 

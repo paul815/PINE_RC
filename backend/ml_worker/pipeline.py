@@ -25,7 +25,7 @@ from .constants import (
     SPEAKER_LABELS,
 )
 from .diarize import Diarizer, detect_diarize_device
-from .engines import TranscribeContext, create_engine, engine_kind_for_model
+from .engines import TranscribeContext, create_engine
 from .errors import TranscriptionCancelled
 from .multitrack import run_multitrack
 from .progress import ProgressMapper
@@ -184,9 +184,9 @@ def join_words(words):
 
     Whisper spells a hyphenated word as two tokens — "как-то" arrives as
     ``[' как', '-то']`` — and tells them apart by the leading space on the first.
-    That space is gone by the time the words reach here: the mlx engine strips
-    every token so the recording UI can find it inside the segment text with
-    ``indexOf``. A plain join then printed "как -то", 89 of them in one 38-minute
+    That space was gone by the time the words reached here: the Mac's former mlx
+    engine stripped every token so the recording UI could find it inside the
+    segment text with ``indexOf``. A plain join then printed "как -то", 89 of them in one 38-minute
     interview, and printed it into the saved transcript, which is what the export
     and the summary read.
 
@@ -229,7 +229,8 @@ def clean_transcript_segments(segments):
         if words_out:
             text = join_words(w['word'] for w in words_out)
         elif had_words:
-            # MLX artifact: keep neither empty nor all-zero-word segments.
+            # Every word dropped (seen from the former mlx engine): keep neither
+            # empty nor all-zero-word segments.
             text = ''
 
         if not text or end <= start:
@@ -343,12 +344,11 @@ class MLPipeline:
         self._engine = None
         self._engine_key = None       # (stt_model_id, model_dir)
         self._diarizer = None
-        self._diarizer_key = None     # (engine_kind, diarize_dir)
+        self._diarizer_key = None     # diarize_dir
 
     def _ensure_models(self, env: JobEnv, need_diarizer=True):
         compat.patch_torch_load_for_trusted_checkpoints()
 
-        engine_kind = engine_kind_for_model(env.stt_model_id)
         prefer_mps = (sys.platform == 'darwin'
                       and detect_diarize_device() != 'cpu')
 
@@ -366,9 +366,9 @@ class MLPipeline:
             # for a model that is never called.
             return
 
-        diarizer_key = (engine_kind, env.diarize_dir)
+        diarizer_key = env.diarize_dir
         if self._diarizer is None or self._diarizer_key != diarizer_key:
-            self._diarizer = Diarizer(env, engine_kind=engine_kind)
+            self._diarizer = Diarizer(env)
             self._diarizer.load()
             self._diarizer_key = diarizer_key
         else:

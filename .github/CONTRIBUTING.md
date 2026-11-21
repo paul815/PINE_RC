@@ -36,7 +36,7 @@ cd backend && python supervisor.py
 `python run.py` starts the backend alone, without the supervisor — useful when
 you want the process in the foreground, but it is not how the app normally runs.
 
-Heavy ML packages (torch, whisperx, pyannote, mlx, onnx) are **not** in
+Heavy ML packages (torch, whisperx, pyannote, onnx) are **not** in
 `requirements.txt` either. They are installed at runtime during onboarding by
 `app/services/pip_installer.py`. Tests that need them skip when they are absent,
 which is also what happens in CI.
@@ -55,7 +55,7 @@ suite exists.
 ## Rules that are not obvious from the code
 
 **The process boundary is load-bearing.** `backend/app/` must never import
-`torch`, `whisperx`, `pyannote` or `mlx`. Those belong to `backend/ml_worker/`
+`torch`, `whisperx` or `pyannote`. Those belong to `backend/ml_worker/`
 alone, so that a CUDA crash or an out-of-memory kill takes down the worker and
 not the app. An import that crosses this line looks harmless and quietly undoes
 the split.

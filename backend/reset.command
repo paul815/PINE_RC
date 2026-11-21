@@ -4,7 +4,7 @@
 #
 # Options:
 #   --keep-venv   DEV ONLY. Keeps backend/.venv, so the multi-gigabyte ML stack
-#                 (torch/torchaudio/mlx-whisper/pyannote, installed by
+#                 (torch/torchaudio/whisperx/pyannote, installed by
 #                 model_manager.py during onboarding — not by the installer)
 #                 survives the reset and onboarding reuses it. Turns a
 #                 minutes-long cycle into a seconds-long one.

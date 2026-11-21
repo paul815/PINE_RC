@@ -1,6 +1,6 @@
 """Installing the ML stack: torch and everything that must match it.
 
-PINE ships without torch, whisperx, pyannote or mlx — together they are several
+PINE ships without torch, whisperx or pyannote — together they are several
 gigabytes, and the right torch build depends on the machine. Onboarding
 installs them here, into the app's own venv, streaming pip's output to the UI.
 

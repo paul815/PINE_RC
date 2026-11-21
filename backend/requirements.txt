@@ -1,9 +1,9 @@
 # Base dependencies — installed by launch scripts on first run.
 # Heavy ML packages (torch, torchaudio, whisperx, pyannote) are NOT listed here;
 # they are installed dynamically by app/services/pip_installer.py during
-# onboarding. Packages only some models need — gliner (PII), mlx-whisper (Apple
-# Silicon) — are installed on demand from MODEL_OPTIONAL_PACKAGES in the same
-# module, so an install that never uses those models never pays for them.
+# onboarding. Packages only some models need — gliner (PII) — are installed on
+# demand from MODEL_OPTIONAL_PACKAGES in the same module, so an install that
+# never uses those models never pays for them.
 # See requirements-lock.txt for the full tree.
 #
 # Versions are PINNED (==) so a fresh install months from now reproduces a

@@ -38,7 +38,6 @@ EXCLUDED_DIR_NAMES = {
     "backups",
     "logs",
     "data",
-    ".tmp_mlx_src",
     ".tmp_vox",
     ".pytest_cache",
 }

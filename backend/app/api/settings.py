@@ -894,6 +894,8 @@ def get_settings():
         'size_bytes': MODEL_REGISTRY.get(model_id, {}).get('size_bytes', 0),
         'installed': _stt_model_installed(model_id),
     } for model_id in supported_stt_models()]
+    # The same model runs on Metal on a Mac, where there is no VRAM to quote.
+    result['is_mac'] = _is_macos()
 
     result['app_version'] = __version__
 

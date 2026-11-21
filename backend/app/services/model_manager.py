@@ -118,14 +118,7 @@ MODEL_REGISTRY = {
 def _model_for_platform(info):
     """Return True if this model entry applies to the current platform."""
     plat = info.get('platform')
-    if plat == 'all':
-        # Explicitly every platform — says so out loud, because for STT models
-        # a bare None means the opposite (see below).
-        return True
-    if plat is None:
-        # STT models with platform=None are for non-Mac platforms
-        if info.get('function') == 'stt':
-            return not IS_MAC
+    if plat is None or plat == 'all':
         return True
     return plat == sys.platform
 

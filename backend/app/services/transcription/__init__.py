@@ -2,9 +2,9 @@
 
 This package owns everything that touches the database, SocketIO or the
 UI: the job queue, the watchdog, status events, cancellation and the
-language-confirmation flow. The ML pipeline itself (WhisperX / mlx-whisper /
-pyannote) lives in the Flask-free ``ml_worker`` package and runs in a
-separate worker process — see ``worker_client.py`` and ``job_runner.py``.
+language-confirmation flow. The ML pipeline itself (WhisperX / pyannote)
+lives in the Flask-free ``ml_worker`` package and runs in a separate worker
+process — see ``worker_client.py`` and ``job_runner.py``.
 
 Module layout:
     __init__.py      — queue, worker thread, watchdog, status/cancel/language API
@@ -19,16 +19,12 @@ import time as _time
 
 # Re-exports: parts of the ML package that the API layer and tests reach
 # through this module for convenience/compatibility.
-from ml_worker.audio import clear_mlx_cache as _clear_mlx_cache  # noqa: F401
 from ml_worker.audio import fmt_elapsed as _fmt_elapsed
 from ml_worker.audio import write_wav as _write_wav  # noqa: F401
 from ml_worker.constants import (  # noqa: F401
     CHUNK_OVERLAP_SEC,
     CHUNK_SIZE_SEC,
     CHUNK_THRESHOLD_SEC,
-    DIARIZE_CHUNK_OVERLAP_SEC,
-    DIARIZE_CHUNK_SIZE_SEC,
-    DIARIZE_CHUNK_THRESHOLD_SEC,
     SPEAKER_LABELS,
 )
 from ml_worker.errors import TranscriptionCancelled  # noqa: F401

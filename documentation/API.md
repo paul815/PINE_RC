@@ -63,8 +63,7 @@ participants. A monologue or a group of five and up falls outside that
 range and has to pass an explicit count (or run with different env values).
 
 The spoken language is detected by the worker, not asked for at upload. When the
-detector is unsure — confidence below `PINE_LANG_CONFIDENCE_MIN` (0.82), or two
-candidates within `PINE_LANG_CONFIDENCE_MARGIN` (0.10) of each other — the job
+detector is unsure — confidence below `PINE_LANG_CONFIDENCE_MIN` (0.82) — the job
 stops mid-flight and parks the recording in `awaiting_language`. The
 `transcription:status` event for that state carries the guess and the shortlist,
 and the job thread waits until `POST …/transcription/language` answers it. A
