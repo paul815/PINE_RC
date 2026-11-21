@@ -492,8 +492,8 @@ input[type="range"] { font-size: 1rem; }
               <div class="row-sub">Back up on startup and on a schedule</div>
             </div>
             <select id="autoBackupFreq" class="field field-sm field-inline" onchange="setAutoBackupFreq(this.value)">
-              <option value="24">Once a day</option>
-              <option value="168" selected>Once a week</option>
+              <option value="24" selected>Once a day</option>
+              <option value="168">Once a week</option>
               <option value="720">Once a month</option>
               <option value="off">Off</option>
             </select>
@@ -1275,7 +1275,7 @@ function applyBackupSettings() {
   document.getElementById('backupPath').value = bp;
   document.getElementById('backupAudio').classList.toggle('on', settings.backup_include_audio === 'true');
   const autoOn = settings.auto_backup_enabled === 'true';
-  let interval = settings.auto_backup_interval_hours || '168';
+  let interval = settings.auto_backup_interval_hours || '24';
   const legacyInterval = { '6': '24', '12': '24', '72': '168' };
   if (legacyInterval[interval]) interval = legacyInterval[interval];
   document.getElementById('autoBackupFreq').value = autoOn ? interval : 'off';
