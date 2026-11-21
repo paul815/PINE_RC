@@ -185,6 +185,28 @@ HALLUCINATION_PHRASES = frozenset({
 # five times normal pace is far from both.
 HALLUCINATION_STRETCH_SEC_PER_WORD = 1.5
 
+# Splitting a segment where its words change speaker (pipeline.py,
+# split_segments_at_speaker_changes). Each sentence goes whole to whoever said
+# most of its words; a sentence is cut only where both sides keep at least this
+# many words — in practice a stretch Whisper left unpunctuated. Measured on the
+# 2026-11-21 recordings: at 5, "Which means that it would / be O of n of n."
+# was cut mid-sentence; the run that needs a cut (SWE 60:08) is 40+ words a side.
+SPEAKER_SPLIT_MIN_WORDS_IN_SENTENCE = 8
+
+# Re-reading a window Whisper wrote without punctuation (ml_worker/punctuation.py).
+# large-v3 in batched mode now and then drops every mark and capital for a whole
+# 30-second window — "and so on so yeah hyundai is definitely a place i would uh
+# recommend…" — 11% of the IELTS test transcript, 9% of the SWE one (2026-11-21).
+# Such a window is decoded once more on its own, prompted with the transcript's
+# own preceding text. On those two files that restored 15 of 17 windows, at
+# 93–98% word agreement — the rest mostly fillers ("uh", "you know") the rest of
+# each transcript leaves out too. A re-read outside these limits is discarded.
+UNPUNCTUATED_MIN_WORDS = 25        # shorter text can lack a mark honestly
+UNPUNCTUATED_MAX_MARK_RATIO = 0.03  # punctuated speech runs 10-25 marks per 100 words
+REREAD_PROMPT_CHARS = 240          # ~60 tokens; Whisper's prompt allows 223
+REREAD_MIN_SIMILARITY = 0.80       # measured worst accepted: 0.88
+REREAD_MAX_LENGTH_CHANGE = 0.30    # word count may move this far, either way
+
 SPEAKER_LABELS = [
     'Moderator',
     'Participant 1',

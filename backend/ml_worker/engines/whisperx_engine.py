@@ -25,6 +25,7 @@ from ..constants import (
     CHUNK_THRESHOLD_SEC,
     LANG_CONFIDENCE_MIN,
 )
+from ..punctuation import accept_reread, is_unpunctuated, prompt_before, tail_text
 from .base import (
     EngineAdapter,
     EngineCapabilities,
@@ -34,6 +35,8 @@ from .base import (
 )
 
 log = logging.getLogger(__name__)
+
+_SAMPLE_RATE = 16000   # whisperx.load_audio and load_audio_range both decode at 16 kHz
 
 
 # Phase timers, kept on purpose (decided 2026-08-21) as the app's only source of
@@ -302,6 +305,14 @@ class WhisperXEngine(EngineAdapter):
             self._device, self._compute_type = detect_torch_device()
         if self._device == 'cuda':
             cap_ct2_allocator()
+        if sys.platform == 'darwin':
+            # Before whisperx, not after: whisperx imports pyannote for its
+            # VAD, and pyannote looks for torchcodec once, at import. On a Mac
+            # the real torchcodec fails to load (no LC_RPATH), so pyannote was
+            # left with no decoder of its own and logged 28 lines saying so on
+            # every start. Diarizer.load installs the same ffmpeg shim, but
+            # since whisperx runs on the Mac that comes too late.
+            compat.stub_torchcodec()
         import whisperx
         log.info('Loading WhisperX model from %s ...', model_dir)
         try:
@@ -374,6 +385,27 @@ class WhisperXEngine(EngineAdapter):
 
     # ── alignment ──
 
+    def _load_align_cache_first(self, whisperx, kwargs):
+        """Load an align model from disk; go online only when it is not there.
+
+        After onboarding the worker runs with Hugging Face offline. Align
+        models are per language and fetched on first use, so offline mode used
+        to be lifted around every load — a cached model too, which leaves the
+        hub client free to ask huggingface.co about it mid-transcription. Now
+        the load tries the local cache with offline mode still on, and lifts it
+        only when that fails: the first recording in a new language.
+        """
+        if not self._hf_offline or compat.hf_network_allowed():
+            return whisperx.load_align_model(**kwargs)
+        try:
+            return whisperx.load_align_model(**kwargs)
+        except Exception as exc:
+            log.info('Align model %s is not on disk (%s) — fetching it',
+                     kwargs.get('model_name') or kwargs.get('language_code'),
+                     str(exc).splitlines()[0][:200] if str(exc) else type(exc).__name__)
+        with compat.allow_hf_network_for_align(self._hf_offline):
+            return whisperx.load_align_model(**kwargs)
+
     def _get_align_model(self, whisperx, language_code, device):
         """Load or return cached alignment model for language_code + device."""
         key = (language_code, device)
@@ -401,11 +433,10 @@ class WhisperXEngine(EngineAdapter):
         metadata = None
         for model_name in attempts:
             try:
-                with compat.allow_hf_network_for_align(self._hf_offline):
-                    kwargs = {'language_code': language_code, 'device': device}
-                    if model_name:
-                        kwargs['model_name'] = model_name
-                    model_a, metadata = whisperx.load_align_model(**kwargs)
+                kwargs = {'language_code': language_code, 'device': device}
+                if model_name:
+                    kwargs['model_name'] = model_name
+                model_a, metadata = self._load_align_cache_first(whisperx, kwargs)
                 if model_name:
                     log.info('Loaded align model override for %s: %s',
                              language_code, model_name)
@@ -577,6 +608,59 @@ class WhisperXEngine(EngineAdapter):
             tx_kw['language'] = language
         return self._model.transcribe(audio, **tx_kw)
 
+    def _reread_unpunctuated(self, segments, audio, language, ctx=None, carry=''):
+        """Decode once more every window Whisper wrote without punctuation.
+
+        ``segments`` are whisperx's raw ones, before alignment, timed against
+        ``audio`` — so the window is cut exactly as Whisper first heard it, and
+        alignment afterwards times the words of whichever text stands. Each
+        re-read is prompted with the transcript's own punctuated text just
+        before it (``carry`` covers the start of a chunk) and replaces the
+        original only when ``accept_reread`` agrees. A failed re-read keeps
+        the original; the model's options are restored whatever happens.
+        """
+        todo = [i for i, s in enumerate(segments) if is_unpunctuated(s.get('text'))]
+        if not todo or self._model is None:
+            return segments
+        if ctx is not None:
+            ctx.on_status(stage='transcribing',
+                          message=f'Restoring punctuation ({len(todo)} passages)…')
+        import dataclasses
+        base = self._model.options
+        restored = 0
+        try:
+            for i in todo:
+                if ctx is not None:
+                    ctx.check_cancel()
+                seg = segments[i]
+                t0, t1 = float(seg.get('start', 0) or 0), float(seg.get('end', 0) or 0)
+                a, b = max(0, int(t0 * _SAMPLE_RATE)), min(len(audio), int(t1 * _SAMPLE_RATE))
+                if b - a < _SAMPLE_RATE:
+                    continue
+                self._model.options = dataclasses.replace(
+                    base, initial_prompt=prompt_before(segments, i, carry) or None)
+                kw = {'batch_size': 1}
+                if language:
+                    kw['language'] = language
+                try:
+                    out = self._model.transcribe(audio[a:b], **kw)
+                except Exception as exc:  # noqa: BLE001 — the original text stands
+                    log.warning('Re-reading %.1f-%.1fs failed: %s', t0, t1, exc)
+                    continue
+                new = ' '.join(str(s.get('text', '') or '').strip()
+                               for s in out.get('segments', [])).strip()
+                if accept_reread(seg.get('text'), new):
+                    seg['text'] = ' ' + new
+                    restored += 1
+                else:
+                    log.info('Re-read of %.1f-%.1fs kept the original '
+                             '(no better, or too different)', t0, t1)
+        finally:
+            self._model.options = base
+        log.info('Re-read %d window(s) Whisper left without punctuation: %d restored',
+                 len(todo), restored)
+        return segments
+
     def _transcribe_chunked(self, whisperx, audio_path, total_duration,
                             language, ctx: TranscribeContext):
         """Transcribe + align long audio in chunks to limit RAM usage.
@@ -595,6 +679,7 @@ class WhisperXEngine(EngineAdapter):
         detected_lang = language or 'en'
         chunked_start = time.monotonic()
         align_enabled = True
+        carry = ''
 
         for i, offset in enumerate(chunk_starts):
             duration = min(CHUNK_SIZE_SEC, total_duration - offset)
@@ -627,6 +712,13 @@ class WhisperXEngine(EngineAdapter):
             lang = result.get('language', language or 'en')
             if i == 0:
                 detected_lang = language or lang
+
+            with _perf(f'chunk {i + 1} punctuation re-read'):
+                self._reread_unpunctuated(result.get('segments', []), chunk_audio,
+                                          language or lang, ctx, carry)
+            # What the next chunk's first window is prompted with: this chunk's
+            # text up to where the next one starts.
+            carry = tail_text(result.get('segments', []), until=step)
 
             # Align (cached align model, reused across chunks and recordings)
             if align_enabled:
@@ -709,6 +801,9 @@ class WhisperXEngine(EngineAdapter):
                 _heartbeat_stop.set()
 
             detected_lang = language or result.get('language', 'en')
+            with _perf('punctuation re-read'):
+                self._reread_unpunctuated(result.get('segments', []), audio,
+                                          detected_lang, ctx)
             ctx.on_status(stage='aligning', message='Aligning word timestamps...')
             try:
                 result = self._align(whisperx, result['segments'], detected_lang, audio)

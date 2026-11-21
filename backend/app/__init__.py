@@ -404,6 +404,8 @@ def create_app(config_class=Config):
     CORS(app, origins=ALLOWED_ORIGINS)
     db.init_app(app)
     socketio.init_app(app)
+    from .shutdown import register_app
+    register_app(app)
 
     # ── Who is allowed to talk to a loopback server ──
     # CORS above decides who may *read* a reply. These two checks decide who

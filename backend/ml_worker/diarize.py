@@ -228,6 +228,28 @@ class Diarizer:
         log.info('PERF: speaker assignment took %.1fs', time.monotonic() - t0)
         return segments
 
+    def _return_cached_memory(self):
+        """Hand the allocator's cache back to the driver once pyannote is done.
+
+        pyannote's embedding pass leaves ~2 GB reserved in PyTorch's caching
+        allocator after the pipeline returns, with 0.04 GB actually in use
+        (measured 2026-11-21 on a 12 GB card, all three test recordings). The
+        weights stay where they are; only the cache goes. Before this, the next
+        recording started Whisper with those 2 GB missing — the log showed the
+        driver's free memory falling 7.0 → 4.9 → 1.3 GB across three jobs and
+        the batch size with it (8 → 4 → 2) — until the first alignment emptied
+        the cache as a side effect.
+        """
+        try:
+            import torch
+            if self.device == 'cuda' and torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            elif self.device == 'mps' and torch.backends.mps.is_available():
+                torch.mps.empty_cache()
+        except Exception:  # noqa: BLE001 — housekeeping, never fails a job
+            log.debug('Could not empty the %s cache after diarization',
+                      self.device, exc_info=True)
+
     def _compute_whisperx(self, diarize_input, num_speakers=None,
                           on_status=_noop_status):
         """whisperx's DiarizationPipeline, as a DataFrame."""
@@ -256,6 +278,7 @@ class Diarizer:
                 raise
         log.info('PERF: diarize pipeline (%s) took %.1fs',
                  self.device, time.monotonic() - t1)
+        self._return_cached_memory()
 
         if sys.platform == 'darwin':
             compat.clear_torchcodec_decode_cache()

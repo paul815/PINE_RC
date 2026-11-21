@@ -437,6 +437,10 @@ def stub_torchcodec():
     # broken install. Same namedtuple the decoder returns, so isinstance holds.
     root.AudioSamples = _AudioSamples
     decoders.AudioSamples = _AudioSamples
+    # pyannote-audio 4 imports this one from torchcodec.decoders as well; without
+    # it the whole import failed and pyannote set its decoder to None, shim or
+    # no shim (checked 2026-11-21 with torchcodec forced off on Windows).
+    decoders.AudioStreamMetadata = _AudioStreamMetadata
     root.decoders = decoders
     root._core = core
     core.ops = ops

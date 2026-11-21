@@ -23,6 +23,7 @@ from .constants import (
     PARALLEL_STAGES,
     PROGRESS_SCALE_KEY,
     SPEAKER_LABELS,
+    SPEAKER_SPLIT_MIN_WORDS_IN_SENTENCE,
 )
 from .diarize import Diarizer, detect_diarize_device
 from .engines import TranscribeContext, create_engine
@@ -203,6 +204,147 @@ def join_words(words):
         else:
             parts.append(word)
     return ' '.join(parts)
+
+
+_SENTENCE_END = re.compile(r'[.?!…]["»”\')\]]*$')
+
+
+def _ends_sentence(word):
+    return bool(_SENTENCE_END.search(str(word.get('word', '') or '')))
+
+
+def split_segments_at_speaker_changes(segments):
+    """Give each sentence to the person who said it, splitting segments to do so.
+
+    ``whisperx.assign_word_speakers`` labels every timed word with the speaker
+    pyannote heard there, but leaves the segment one label: whoever overlaps
+    it most. Whisper's segments follow its 30-second windows, not the turns,
+    so a reply that lands in the window of the question was filed under the
+    questioner — "i don't really remember … title and author yeah it is tricky
+    because …" came out as one speaker's line. The word labels already know
+    better; this function uses them.
+
+    The unit is the sentence, not the word. The diarizer's boundary is a word
+    or two off as often as not, and cutting there left "— Вы его" on one line
+    and "предложили, да?" on the next. A sentence goes whole to whoever said
+    most of its words; it is cut only where both sides of a change keep
+    SPEAKER_SPLIT_MIN_WORDS_IN_SENTENCE words — in practice a stretch Whisper
+    left without punctuation. A segment that stays in one piece comes back as
+    the same object, its label untouched.
+    """
+    out = []
+    for seg in segments or []:
+        out.extend(_split_one_segment(seg))
+    return out
+
+
+def _speaker_runs(labels, a, b):
+    """[speaker, start, end) runs over labels[a:b]; unlabelled words join a neighbour."""
+    runs = []
+    for i in range(a, b):
+        s = labels[i]
+        if s is None:
+            if runs:
+                runs[-1][2] = i + 1
+            continue
+        if runs and runs[-1][0] == s:
+            runs[-1][2] = i + 1
+        else:
+            runs.append([s, runs[-1][2] if runs else a, i + 1])
+    return runs
+
+
+def _absorb_short_runs(runs, min_words):
+    """Fold runs shorter than ``min_words`` into a neighbour, shortest first."""
+    runs = [list(r) for r in runs]
+    while len(runs) > 1:
+        k = min(range(len(runs)), key=lambda i: runs[i][2] - runs[i][1])
+        if runs[k][2] - runs[k][1] >= min_words:
+            break
+        if k == 0:
+            runs[1][1] = runs[0][1]
+        elif k == len(runs) - 1:
+            runs[k - 1][2] = runs[k][2]
+        elif runs[k - 1][2] - runs[k - 1][1] >= runs[k + 1][2] - runs[k + 1][1]:
+            runs[k - 1][2] = runs[k][2]
+        else:
+            runs[k + 1][1] = runs[k][1]
+        del runs[k]
+        merged = []
+        for r in runs:
+            if merged and merged[-1][0] == r[0]:
+                merged[-1][2] = r[2]
+            else:
+                merged.append(r)
+        runs = merged
+    return runs
+
+
+def _majority_speaker(labels, a, b):
+    """Who said most of labels[a:b]; a tie goes to whoever opens it."""
+    counts = {}
+    for s in labels[a:b]:
+        if s is not None:
+            counts[s] = counts.get(s, 0) + 1
+    if not counts:
+        return None
+    best = max(counts.values())
+    return next(s for s in labels[a:b] if s is not None and counts[s] == best)
+
+
+def _split_one_segment(seg):
+    words = seg.get('words') or []
+    # A dash or a lone quote mark gets a timestamp and so a speaker, but nobody
+    # says it: Whisper's dialogue dash ("нем… — Вы его предложили, да?") would
+    # vote with the speaker before it and keep the question on the wrong line.
+    labels = [w.get('speaker') if any(ch.isalnum() for ch in str(w.get('word', '')))
+              else None for w in words]
+    if len({s for s in labels if s}) < 2:
+        return [seg]
+
+    sentences, a = [], 0
+    for i, w in enumerate(words):
+        if _ends_sentence(w):
+            sentences.append((a, i + 1))
+            a = i + 1
+    if a < len(words):
+        sentences.append((a, len(words)))
+
+    spans = []                      # [speaker, start, end) over words
+    for a, b in sentences:
+        runs = _absorb_short_runs(_speaker_runs(labels, a, b),
+                                  SPEAKER_SPLIT_MIN_WORDS_IN_SENTENCE)
+        if len(runs) > 1:
+            parts = runs
+        else:
+            spk = (_majority_speaker(labels, a, b)
+                   or (spans[-1][0] if spans else seg.get('speaker')))
+            parts = [[spk, a, b]]
+        for spk, x, y in parts:
+            if spans and spans[-1][0] == spk:
+                spans[-1][2] = y
+            else:
+                spans.append([spk, x, y])
+    if len(spans) < 2:
+        return [seg]
+
+    pieces = []
+    for spk, a, b in spans:
+        chunk = words[a:b]
+        starts = [w['start'] for w in chunk if w.get('start') is not None]
+        ends = [w['end'] for w in chunk if w.get('end') is not None]
+        start = starts[0] if starts else (pieces[-1]['end'] if pieces else seg.get('start'))
+        end = ends[-1] if ends else (seg.get('end') if b == len(words) else start)
+        piece = dict(seg)
+        piece.update({
+            'start': start,
+            'end': end,
+            'text': join_words(str(w.get('word', '')) for w in chunk),
+            'words': chunk,
+            'speaker': spk,
+        })
+        pieces.append(piece)
+    return pieces
 
 
 def clean_transcript_segments(segments):
@@ -555,6 +697,11 @@ class MLPipeline:
         if diarization is not None:
             try:
                 segments = self._diarizer.assign(diarization, segments)
+                before = len(segments)
+                segments = split_segments_at_speaker_changes(segments)
+                if len(segments) != before:
+                    log.info('Split %d segments at speaker changes (%d -> %d)',
+                             len(segments) - before, before, len(segments))
             except Exception as exc:      # noqa: BLE001 — best-effort labels
                 _log_diarization_failure(exc)
 
