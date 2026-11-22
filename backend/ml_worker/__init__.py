@@ -21,4 +21,4 @@ SocketIO status events and the watchdog; it talks to this package through
 ``app/services/transcription/worker_client.py``.
 """
 
-__version__ = '1.2.0'
+__version__ = '1.2.1'

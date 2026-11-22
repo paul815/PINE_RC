@@ -11,7 +11,7 @@ Interview transcription and analysis for researchers of all kinds — running en
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Python 3.11–3.13](https://img.shields.io/badge/Python-3.11%E2%80%933.13-3776AB.svg)](https://www.python.org/)
 [![Platform: Windows | macOS](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS-lightgrey.svg)](#requirements)
-[![Version 1.2.0](https://img.shields.io/badge/Version-1.2.0-green.svg)](https://github.com/paul815/PINE/releases)
+[![Version 1.2.1](https://img.shields.io/badge/Version-1.2.1-green.svg)](https://github.com/paul815/PINE/releases)
 
 [Install](#install) · [Requirements](#requirements) · [Privacy](#privacy-and-network) · [Docs](#documentation)
 

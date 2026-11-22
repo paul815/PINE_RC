@@ -14,7 +14,7 @@ from .config import Config, resolve_secret_key
 from .extensions import db, socketio
 from .ports import backend_port, supervisor_port
 
-__version__ = "1.2.0"
+__version__ = "1.2.1"
 log = logging.getLogger(__name__)
 
 
