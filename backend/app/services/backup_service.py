@@ -164,6 +164,46 @@ def _inside_or_none(root, rel_path):
         return None
 
 
+# What a recording row may be restored as. In-flight states are not among
+# them: requeue_interrupted() re-runs 'transcribing' and 'awaiting_language' at
+# the next start, so a backup could make the worker open a path on its own.
+_RESTORABLE_STATUSES = frozenset({'pending', 'transcribed', 'error', 'cancelled'})
+_FILE_FORMAT_RE = re.compile(r'[a-z0-9][a-z0-9_-]{0,15}')
+_LANGUAGE_RE = re.compile(r'[a-z]{2,8}(-[a-z0-9]{2,8})?')
+
+
+def _is_network_path(path):
+    r"""A UNC share, a device path (\\?\, \\.\) or //host — anything off this disk.
+
+    Opening one sends an SMB request, with the user's NTLM hash, to whatever
+    host it names.
+    """
+    return (path or '').replace('\\', '/').startswith('//')
+
+
+def _restored_status(value):
+    status = str(value or '').strip()
+    return status if status in _RESTORABLE_STATUSES else 'pending'
+
+
+def _restored_token(value, pattern):
+    """A short code (file format, language) in its expected shape, else ''."""
+    text = str(value or '').strip().lower()
+    return text if pattern.fullmatch(text) else ''
+
+
+def _restored_number(value, cast):
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return cast(0)
+    return cast(number) if number == number and abs(number) != float('inf') else cast(0)
+
+
+def _restored_flag(value):
+    return value is True or value == 1 or str(value).strip().lower() == 'true'
+
+
 def _serialize_recording_for_backup(recording, include_audio):
     data = recording.to_dict()
     if recording.is_linked:
@@ -752,7 +792,7 @@ def _restore_inner(app, filename, project_folders, restore_settings, conflict_st
                         name=sdata.get('name', ''),
                         description=sdata.get('description', ''),
                         screener_questions=sdata.get('screener_questions', ''),
-                        target_count=sdata.get('target_count', 0),
+                        target_count=_restored_number(sdata.get('target_count', 0), int),
                     )
                     db.session.add(segment)
                     db.session.flush()
@@ -779,10 +819,11 @@ def _restore_inner(app, filename, project_folders, restore_settings, conflict_st
                     custom_sections=json.dumps(pdata.get('custom_sections', [])),
                     custom_summary_sections=json.dumps(pdata.get('custom_summary_sections', [])),
                     icon=pdata.get('icon', ''),
-                    is_archived=pdata.get('is_archived', False),
-                    is_system=pdata.get('is_system', False),
+                    is_archived=_restored_flag(pdata.get('is_archived', False)),
+                    is_system=_restored_flag(pdata.get('is_system', False)),
                     folder_name=folder,
-                    default_transcription_language=pdata.get('default_transcription_language', '') or '',
+                    default_transcription_language=_restored_token(
+                        pdata.get('default_transcription_language'), _LANGUAGE_RE),
                 )
                 db.session.add(project)
                 db.session.flush()
@@ -801,16 +842,24 @@ def _restore_inner(app, filename, project_folders, restore_settings, conflict_st
                     if is_linked and archived_audio_name:
                         stored_name = archived_audio_name
                         is_linked = False
+                    elif is_linked and _is_network_path(stored_name):
+                        # The recording, transcript and codes come back; the
+                        # link to a share does not. A NAS link in one's own
+                        # backup is legitimate, but nothing here can tell it
+                        # from a host waiting for this machine's NTLM hash.
+                        log.warning('Restore dropped a network link for recording %r',
+                                    rdata.get('original_name'))
+                        stored_name = ''
 
                     recording = Recording(
                         project_id=project.id,
                         original_name=rdata['original_name'],
                         stored_name=stored_name,
-                        file_format=rdata.get('file_format', ''),
-                        file_size_bytes=rdata.get('file_size_bytes', 0),
-                        duration_seconds=rdata.get('duration_seconds', 0),
-                        transcription_status=rdata.get('transcription_status', 'pending'),
-                        language=rdata.get('language', ''),
+                        file_format=_restored_token(rdata.get('file_format'), _FILE_FORMAT_RE),
+                        file_size_bytes=_restored_number(rdata.get('file_size_bytes', 0), int),
+                        duration_seconds=_restored_number(rdata.get('duration_seconds', 0), float),
+                        transcription_status=_restored_status(rdata.get('transcription_status')),
+                        language=_restored_token(rdata.get('language'), _LANGUAGE_RE),
                         transcript_path=rdata.get('transcript_path', ''),
                         error_message=rdata.get('error_message', ''),
                         segment_id=new_seg_id,

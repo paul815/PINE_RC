@@ -25,7 +25,7 @@ from ...services.annotations import (
 )
 from ...services.file_utils import atomic_read_json
 from ...services.speaker_blocks import merge_speaker_blocks
-from .common import _projects_root, _touch_project, projects_bp
+from .common import _project_file_or_none, _projects_root, _touch_project, projects_bp
 
 @projects_bp.route('/<int:project_id>/tags', methods=['GET', 'PATCH'])
 def project_tags(project_id):
@@ -124,7 +124,8 @@ def _recording_segments(project_dir, recording):
     """A recording's transcript segments, or [] when there is no transcript yet."""
     if not recording.transcript_path:
         return []
-    transcript = _cached_json(os.path.join(project_dir, recording.transcript_path))
+    transcript_file = _project_file_or_none(project_dir, recording.transcript_path)
+    transcript = _cached_json(transcript_file) if transcript_file else None
     return (transcript or {}).get('segments') or []
 
 
@@ -159,8 +160,8 @@ def tag_quotes(project_id):
         if rec.transcription_status != 'transcribed' or not rec.transcript_path:
             continue
 
-        transcript_file = os.path.join(project_dir, rec.transcript_path)
-        transcript = _cached_json(transcript_file)
+        transcript_file = _project_file_or_none(project_dir, rec.transcript_path)
+        transcript = _cached_json(transcript_file) if transcript_file else None
         if transcript is None:
             continue
 

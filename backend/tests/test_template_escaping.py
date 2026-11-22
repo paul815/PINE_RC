@@ -171,7 +171,9 @@ def test_settings_backup_list_does_not_concatenate_raw_manifest_values():
     numbers into Settings, so its script ran every time the page opened.
     """
     source = _source(TEMPLATES / 'settings.html')
-    raw = re.findall(r"\+\s*([bm]\.(?:project_count|recording_count|backup_version))\b", source)
+    # Any object, not just b./m.: the restore dialog's per-project list (p.)
+    # was missed by a narrower pattern and ran a manifest's script on open.
+    raw = re.findall(r"\+\s*([A-Za-z_]\w*\.\w*count\w*)\b", source)
 
     assert raw == []
     assert not re.search(r"onclick=\"\w+\(\\'' \+ esc\(", source), \

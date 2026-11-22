@@ -766,7 +766,7 @@ mark.pending-selection-highlight {
 <script>
 const PROJECT_ID = {{ project_id }};
 const RECORDING_ID = {{ recording_id }};
-const FILE_FORMAT = '{{ file_format }}';
+const FILE_FORMAT = {{ (file_format or '')|tojson }};
 const API = '/api/projects';
 
 let data = null;

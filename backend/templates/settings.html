@@ -1426,7 +1426,7 @@ async function uploadBackup(input) {
     const res = await fetch(BACKUP_API + '/upload', { method: 'POST', body: fd });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'Upload failed');
-    toast('Uploaded: ' + data.filename + ' (' + data.project_count + ' projects)');
+    toast('Uploaded: ' + data.filename + ' (' + escNum(data.project_count) + ' projects)');
     loadBackupList();
   } catch (e) { toast('Upload failed: ' + e.message); }
   input.value = '';
@@ -1453,7 +1453,7 @@ async function openRestoreModal(filename) {
 
     html += '<div class="chk-row"><input type="checkbox" id="restoreSelectAll" checked onchange="toggleRestoreAll(this.checked)"><label for="restoreSelectAll" style="font-weight:500">Select all projects</label></div>';
     (m.projects || []).forEach((p, i) => {
-      html += '<div class="chk-row" style="padding-left:20px"><input type="checkbox" class="restore-proj-chk" data-folder="' + esc(p.folder_name) + '" id="rp' + i + '" checked><label for="rp' + i + '">' + esc(p.name) + ' <span style="color:var(--muted-fg);font-size:0.846rem">(' + p.recording_count + ' rec.)</span></label></div>';
+      html += '<div class="chk-row" style="padding-left:20px"><input type="checkbox" class="restore-proj-chk" data-folder="' + esc(p.folder_name) + '" id="rp' + i + '" checked><label for="rp' + i + '">' + esc(p.name) + ' <span style="color:var(--muted-fg);font-size:0.846rem">(' + escNum(p.recording_count) + ' rec.)</span></label></div>';
     });
 
     html += '<div style="margin-top:12px;padding-top:10px;border-top:1px solid var(--border)">';

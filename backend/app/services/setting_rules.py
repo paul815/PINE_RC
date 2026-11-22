@@ -14,6 +14,9 @@ FONT_SIZE_MIN = 8
 FONT_SIZE_MAX = 32
 DEFAULT_FONT_SIZE = '13'
 
+PII_THRESHOLD_MIN = 0.3   # settings.html: <input type="range" min="0.3" max="0.9">
+PII_THRESHOLD_MAX = 0.9
+
 # Preferences that describe how a person likes to work and travel sensibly
 # with their backup. Everything else stays with the machine that set it:
 #   backup_path, backup_include_audio, auto_backup_* — where and what this
@@ -21,6 +24,8 @@ DEFAULT_FONT_SIZE = '13'
 #     all to a network share;
 #   stt_model_id — names a model that may not be installed here;
 #   last_open_project_id, launcher and onboarding keys — this install's state;
+#   export_default_prompt(_recording) — text that goes to an LLM together with
+#     the transcript; a backup someone else made must not write it;
 #   hf_token, models_path, projects_path — never in a backup to begin with.
 RESTORABLE_SETTINGS = frozenset({
     'font_size',
@@ -33,8 +38,6 @@ RESTORABLE_SETTINGS = frozenset({
     'export_default_participant_details',
     'export_default_remove_pii',
     'export_default_include_prompt',
-    'export_default_prompt',
-    'export_default_prompt_recording',
     'transcription_timeout_secs',
     'link_recordings',
     'backup_retention_count',
@@ -71,4 +74,12 @@ def clean_setting(key, value):
             return None
         volume = int(text)
         return str(volume) if 0 <= volume <= 100 else None
+    if key == 'pii_threshold':
+        # The slider's range. Near 1.0 the detector reports nothing, which
+        # turns "remove PII" off without a word.
+        try:
+            threshold = float(text)
+        except ValueError:
+            return None
+        return text if PII_THRESHOLD_MIN <= threshold <= PII_THRESHOLD_MAX else None
     return text

@@ -278,7 +278,18 @@ def _run_startup_checks(app):
         project = db.session.get(Project, rec.project_id)
         if not project:
             continue
-        transcript_file = os.path.join(projects_path, project.folder_name, rec.transcript_path)
+        # A path that leaves the project can only come from a restore made
+        # before archive paths were checked. Flag it like a missing file so
+        # no route reads or writes through it; the row and the file stay.
+        from .services.file_utils import safe_child_path, safe_project_dir
+        try:
+            transcript_file = safe_child_path(
+                safe_project_dir(projects_path, project.folder_name), rec.transcript_path)
+        except ValueError:
+            rec.transcription_status = 'error'
+            rec.error_message = 'Transcript path points outside the project (detected on startup)'
+            orphans += 1
+            continue
         if not os.path.isfile(transcript_file):
             rec.transcription_status = 'error'
             rec.error_message = 'Transcript file missing (detected on startup)'

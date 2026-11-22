@@ -358,8 +358,8 @@ def get_recording(project_id, recording_id):
     project_dir = os.path.join(_projects_root(), project.folder_name)
 
     if recording.transcription_status == 'transcribed' and recording.transcript_path:
-        transcript_file = os.path.join(project_dir, recording.transcript_path)
-        if os.path.isfile(transcript_file):
+        transcript_file = _project_file_or_none(_project_dir_or_none(project), recording.transcript_path)
+        if transcript_file and os.path.isfile(transcript_file):
             data['transcript'] = with_speaker_blocks(atomic_read_json(transcript_file))
 
     data['tags'] = get_project_tags(project_dir)
@@ -453,8 +453,8 @@ def get_transcript(project_id, recording_id):
         return jsonify({'error': 'Transcript not available', 'status': recording.transcription_status}), 404
 
     project = db.session.get(Project, project_id)
-    transcript_file = os.path.join(_projects_root(), project.folder_name, recording.transcript_path)
-    if not os.path.isfile(transcript_file):
+    transcript_file = _project_file_or_none(_project_dir_or_none(project), recording.transcript_path)
+    if not transcript_file or not os.path.isfile(transcript_file):
         return jsonify({'error': 'Transcript file missing'}), 404
 
     return jsonify(with_speaker_blocks(atomic_read_json(transcript_file)))
@@ -481,8 +481,8 @@ def replace_transcript_text(project_id, recording_id):
     whole_word = _parse_bool(body.get('whole_word'), False)
 
     project = db.session.get(Project, project_id)
-    transcript_file = os.path.join(_projects_root(), project.folder_name, recording.transcript_path)
-    if not os.path.isfile(transcript_file):
+    transcript_file = _project_file_or_none(_project_dir_or_none(project), recording.transcript_path)
+    if not transcript_file or not os.path.isfile(transcript_file):
         return jsonify({'error': 'Transcript file missing'}), 404
 
     transcript = atomic_read_json(transcript_file)
@@ -535,8 +535,8 @@ def edit_transcript_block(project_id, recording_id):
     new_text = str(body.get('new_text') or '')
 
     project = db.session.get(Project, project_id)
-    transcript_file = os.path.join(_projects_root(), project.folder_name, recording.transcript_path)
-    if not os.path.isfile(transcript_file):
+    transcript_file = _project_file_or_none(_project_dir_or_none(project), recording.transcript_path)
+    if not transcript_file or not os.path.isfile(transcript_file):
         return jsonify({'error': 'Transcript file missing'}), 404
 
     transcript = atomic_read_json(transcript_file)

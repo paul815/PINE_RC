@@ -4,7 +4,7 @@ import logging
 import os
 from datetime import datetime
 
-from .file_utils import atomic_read_json
+from .file_utils import atomic_read_json, safe_child_path
 
 # How PINE's own markdown reads (see _render_transcript_blocks and
 # _build_project_header). Both prompts carry it, so a change to the export
@@ -643,6 +643,17 @@ def _build_project_header(project):
     return lines
 
 
+def _transcript_file(project_dir, transcript_path):
+    """The recording's transcript inside *project_dir*, or None if it points elsewhere."""
+    if not transcript_path:
+        return None
+    try:
+        return safe_child_path(project_dir, transcript_path)
+    except ValueError:
+        log.warning('Export skipped a transcript path outside %s: %r', project_dir, transcript_path)
+        return None
+
+
 def _remove_pii_for_export(app, recording, segments, comments, notes, ordinal):
     """Redact what an export of *recording* would otherwise carry out by name.
 
@@ -710,8 +721,8 @@ def export_recording_markdown(app, project_id, recording_id, opts):
 
         root = _projects_root(app)
         project_dir = os.path.join(root, project.folder_name)
-        transcript_path = os.path.join(project_dir, recording.transcript_path or '')
-        if not os.path.isfile(transcript_path):
+        transcript_path = _transcript_file(project_dir, recording.transcript_path)
+        if not transcript_path or not os.path.isfile(transcript_path):
             return None, 'Transcript not found'
 
         transcript = atomic_read_json(transcript_path)
@@ -816,8 +827,8 @@ def export_project_markdown(app, project_id, recording_ids, opts):
             if recording.transcription_status != 'transcribed' or not recording.transcript_path:
                 continue
 
-            transcript_path = os.path.join(project_dir, recording.transcript_path or '')
-            if not os.path.isfile(transcript_path):
+            transcript_path = _transcript_file(project_dir, recording.transcript_path)
+            if not transcript_path or not os.path.isfile(transcript_path):
                 continue
 
             transcript = atomic_read_json(transcript_path)
