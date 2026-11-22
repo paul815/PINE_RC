@@ -20,10 +20,12 @@ Everything runs with `PIP_REQUIRE_VIRTUALENV=1` and `PYTHONNOUSERSITE=1`, so a
 mistake here can never write into the user's system or `~/.local` packages.
 """
 
+import importlib.metadata
 import logging
 import os
 import subprocess
 import sys
+import tempfile
 from datetime import datetime
 
 from ..extensions import safe_emit as _safe_emit
@@ -545,6 +547,42 @@ def _run_pip(packages, extra_args=None):
         _install_emit(f'ERROR: {exc}')
         return False
 
+_TORCH_STACK = ('torch', 'torchaudio', 'torchvision')
+
+def _torch_stack_constraints():
+    """``name==version`` for each torch-stack package installed right now.
+
+    Read from package metadata, not by importing: torch may already sit in
+    sys.modules from before a reinstall, and importing it costs seconds.
+    """
+    pins = []
+    for name in _TORCH_STACK:
+        try:
+            pins.append(f'{name}=={importlib.metadata.version(name)}')
+        except importlib.metadata.PackageNotFoundError:
+            continue
+    return pins
+
+def _run_pip_constrained(packages, constraints):
+    """Run pip with *constraints* (``name==version`` lines) passed as a ``-c`` file.
+
+    A constraint only limits versions, it installs nothing, so pip keeps the
+    build already there and backtracks the packages that would need another.
+    """
+    if not constraints:
+        return _run_pip(packages)
+    fd, path = tempfile.mkstemp(prefix='pine-constraints-', suffix='.txt')
+    try:
+        with os.fdopen(fd, 'w', encoding='utf-8') as fh:
+            fh.write('\n'.join(constraints) + '\n')
+        _install_emit(f'Keeping the installed PyTorch build: {", ".join(constraints)}')
+        return _run_pip(packages, extra_args=['-c', path])
+    finally:
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+
 def install_pip_packages():
     """Install required pip packages if missing. Streams output via SocketIO and to
     a per-session install log file (``backend/logs/YYYY-MM-DD/install-{stamp}-{pid}.log``)."""
@@ -626,8 +664,14 @@ def install_pip_packages():
                 # Now pull whisperx's non-torch runtime deps.  faster-whisper
                 # transitively brings ctranslate2, onnxruntime, tokenizers, av;
                 # pyannote-audio brings lightning, scikit-learn, etc.
+                # pyannote-audio floats, and so does what it pulls in: when
+                # pytorch-metric-learning 3.0.4 asked for torch>=2.14, pip swapped
+                # the CUDA torch from Phase 2 for a CPU one from PyPI and the
+                # re-align below put the 2.75 GB wheel back (2026-11-22). Holding
+                # the torch stack at what is installed makes pip pick versions of
+                # those packages that fit it instead.
                 _install_step('Phase 5/5: Installing whisperx dependencies', 'Step 5/5: whisperx deps')
-                success = _run_pip([
+                success = _run_pip_constrained([
                     _pinned('faster-whisper'),
                     'pyannote-audio',
                     _pinned('transformers'),
@@ -635,7 +679,7 @@ def install_pip_packages():
                     'pandas',
                     'omegaconf',
                     _pinned('huggingface-hub'),
-                ])
+                ], _torch_stack_constraints())
 
             if success and not _torch_companion_channels_aligned():
                 # Safety net: re-align only when channels actually diverged.

@@ -49,6 +49,53 @@ def test_windows_leaves_torch_to_torchruntime_and_pyannote_floating(windows):
     assert 'pyannote-audio' in installed
 
 
+def test_windows_whisperx_deps_cannot_replace_the_installed_torch(windows, monkeypatch):
+    # pyannote-audio floats, and so does what it pulls in: pytorch-metric-learning
+    # 3.0.4 asks for torch>=2.14, so pip swapped the CUDA torch torchruntime chose
+    # for a CPU torch from PyPI, and the re-align step put the 2.75 GB CUDA wheel
+    # back (seen 2026-11-22). Phase 5 holds the torch stack where Phase 2-3 left it.
+    pi, _ = windows
+    monkeypatch.setattr(pi, '_torch_stack_constraints',
+                        lambda: ['torch==2.11.0+cu128', 'torchaudio==2.11.0+cu128',
+                                 'torchvision==0.26.0+cu128'])
+    seen = []
+
+    def fake_run_pip(packages, extra_args=None):
+        args = list(extra_args or [])
+        constraints = None
+        if '-c' in args:
+            with open(args[args.index('-c') + 1], encoding='utf-8') as fh:
+                constraints = fh.read().split()
+        seen.append((list(packages), constraints))
+        return True
+
+    monkeypatch.setattr(pi, '_run_pip', fake_run_pip)
+
+    assert pi.install_pip_packages() is True
+
+    phase5 = [c for p, c in seen if 'pyannote-audio' in p]
+    assert phase5 == [['torch==2.11.0+cu128', 'torchaudio==2.11.0+cu128',
+                       'torchvision==0.26.0+cu128']]
+
+
+def test_torch_stack_constraints_name_what_is_installed(monkeypatch):
+    import importlib.metadata as md
+
+    from app.services import pip_installer as pi
+
+    versions = {'torch': '2.11.0+cu128', 'torchvision': '0.26.0+cu128'}
+
+    def fake_version(name):
+        if name not in versions:
+            raise md.PackageNotFoundError(name)
+        return versions[name]
+
+    monkeypatch.setattr(pi.importlib.metadata, 'version', fake_version)
+
+    assert pi._torch_stack_constraints() == ['torch==2.11.0+cu128',
+                                             'torchvision==0.26.0+cu128']
+
+
 def test_windows_self_heal_installs_the_pinned_version(monkeypatch):
     from app.services import pip_installer as pi
 
