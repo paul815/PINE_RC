@@ -170,33 +170,85 @@ def detect_pii(text, threshold=0.6):
         raise PIIError(f'PII detection failed: {exc}') from exc
 
 
+def _unchanged_offset(offset, side='start'):
+    return offset
+
+
+def redact_with_offsets(text, entities):
+    """Redact *entities* in *text*; return ``(new_text, where)``.
+
+    ``where(offset, side)`` says where an offset into the old text lands in the
+    new one: unchanged before an entity, shifted by the change in length after
+    it, and — for an offset inside an entity — the marker's start
+    (``side='start'``) or end (``side='end'``), so an anchor that covered part
+    of a name now covers its marker. Tags and comments are stored as such
+    offsets; without this they slid off their words after every redaction.
+    Overlapping entities become one marker.
+    """
+    spans = []
+    usable = (e for e in entities or [] if e.get('start') is not None and e.get('end') is not None)
+    for ent in sorted(usable, key=lambda e: (e['start'], -e['end'])):
+        s = max(0, min(int(ent['start']), len(text)))
+        e = max(0, min(int(ent['end']), len(text)))
+        if e <= s:
+            continue
+        if spans and s < spans[-1][1]:
+            spans[-1][1] = max(spans[-1][1], e)
+            continue
+        spans.append([s, e, ent.get('label', 'PII')])
+
+    parts, pos, edits = [], 0, []
+    for s, e, label in spans:
+        marker = f'[{label} redacted]'
+        parts += [text[pos:s], marker]
+        edits.append((s, e, len(marker)))
+        pos = e
+    parts.append(text[pos:])
+
+    def where(offset, side='start'):
+        delta = 0
+        for s, e, n in edits:
+            if offset <= s:
+                break
+            if offset < e:
+                return s + delta + (n if side == 'end' else 0)
+            delta += n - (e - s)
+        return offset + delta
+
+    return ''.join(parts), where
+
+
 def redact_text(text, entities=None, replacement='[REDACTED]'):
     """Replace PII entities in text with a redaction marker."""
     if entities is None:
         entities = detect_pii(text)
     if not entities:
         return text
-    # Sort by start position descending so replacements don't shift indices
-    sorted_ents = sorted(entities, key=lambda e: e['start'], reverse=True)
-    result = text
-    for ent in sorted_ents:
-        s, e = ent['start'], ent['end']
-        label = ent.get('label', 'PII')
-        result = result[:s] + f'[{label} redacted]' + result[e:]
-    return result
+    return redact_with_offsets(text, entities)[0]
 
 
-def redact_segments(segments, threshold=0.6):
-    """Redact PII from a list of transcript segments. Returns new list."""
+def redact_segments_with_offsets(segments, threshold=0.6):
+    """Redact PII from transcript segments; return ``(segments, offset_maps)``.
+
+    ``offset_maps[i]`` is segment i's ``where`` from ``redact_with_offsets``
+    (the identity where nothing was found), for moving annotation anchors.
+    """
     if _gliner_model is None:
         raise PIIError('GLiNER model is not loaded. Call _load_model() first.')
-    redacted = []
+    redacted, maps = [], []
     for seg in segments:
         new_seg = dict(seg)
+        where = _unchanged_offset
         text = new_seg.get('text', '')
         if text:
             entities = detect_pii(text, threshold=threshold)
             if entities:
-                new_seg['text'] = redact_text(text, entities)
+                new_seg['text'], where = redact_with_offsets(text, entities)
         redacted.append(new_seg)
-    return redacted
+        maps.append(where)
+    return redacted, maps
+
+
+def redact_segments(segments, threshold=0.6):
+    """Redact PII from a list of transcript segments. Returns new list."""
+    return redact_segments_with_offsets(segments, threshold=threshold)[0]

@@ -654,26 +654,116 @@ def _transcript_file(project_dir, transcript_path):
         return None
 
 
-def _remove_pii_for_export(app, recording, segments, comments, notes, ordinal):
+class _AnchorRemap:
+    """Move tag and comment offsets from a transcript onto its redacted copy.
+
+    Anchors are character offsets, into one segment's text or into the merged
+    text of a speaker block (see ``_inline_span_bounds``). Redaction changes
+    lengths, so every offset is taken through the old block to the segment it
+    falls in, moved with that segment's ``where`` map, and placed back into the
+    block that segment sits in after redaction. The export then reads exactly
+    as it would without PII removal, names replaced by their markers.
+    """
+
+    def __init__(self, old_segments, new_segments, maps):
+        self._old, self._new, self._maps = old_segments, new_segments, maps
+        self._old_blocks = self._blocks(old_segments)
+        self._new_blocks = self._blocks(new_segments)
+
+    @staticmethod
+    def _blocks(segments):
+        where = {}
+        for block in merge_speaker_blocks(segments):
+            indices = block['indices']
+            _, offsets = block_text_and_offsets(segments, indices)
+            for i in indices:
+                where[i] = (indices, offsets)
+        return where
+
+    @staticmethod
+    def _lead(segments, i):
+        text = segments[i].get('text') or ''
+        return len(text) - len(text.lstrip())
+
+    def _known(self, anchor, pos):
+        return (isinstance(anchor, int) and anchor in self._old_blocks
+                and isinstance(pos, (int, float)))
+
+    def merged(self, anchor, pos, side):
+        """An offset into the block holding segment *anchor*, after redaction."""
+        if not self._known(anchor, pos):
+            return pos
+        indices, offsets = self._old_blocks[anchor]
+        target = indices[0]
+        for i in indices:
+            if offsets[i] <= pos:
+                target = i
+        local = pos - offsets[target]
+        # Blocks join stripped segment texts; the maps work on the raw text.
+        raw = self._maps[target](local + self._lead(self._old, target), side)
+        moved = max(0, raw - self._lead(self._new, target))
+        _, new_offsets = self._new_blocks.get(target, (None, {}))
+        return new_offsets.get(target, 0) + moved
+
+    def segment(self, anchor, pos, side):
+        """An offset relative to segment *anchor* (it may run on into the block)."""
+        if not self._known(anchor, pos):
+            return pos
+        _, old_offsets = self._old_blocks[anchor]
+        _, new_offsets = self._new_blocks.get(anchor, (None, {}))
+        moved = self.merged(anchor, old_offsets[anchor] + pos, side)
+        return moved - new_offsets.get(anchor, 0)
+
+    def span(self, span):
+        out = dict(span)
+        idx = span.get('segment_idx')
+        end_idx = span.get('end_segment_idx')
+        if out.get('start_char') is not None:
+            out['start_char'] = self.segment(idx, out['start_char'], 'start')
+        if out.get('end_char') is not None:
+            out['end_char'] = self.segment(idx, out['end_char'], 'end')
+        if out.get('merged_start') is not None:
+            out['merged_start'] = self.merged(idx, out['merged_start'], 'start')
+        if out.get('merged_end') is not None:
+            out['merged_end'] = self.merged(idx, out['merged_end'], 'end')
+        # Both renderers read either key as an offset into the end block.
+        end_anchor = end_idx if end_idx is not None else idx
+        for key in ('end_merged_end', 'end_seg_end_char'):
+            if out.get(key) is not None:
+                out[key] = self.merged(end_anchor, out[key], 'end')
+        return out
+
+
+def _remove_pii_for_export(app, recording, segments, tag_spans, comments, notes, ordinal):
     """Redact what an export of *recording* would otherwise carry out by name.
 
     The transcript text was always covered. A respondent's name more often sits
     in the places that were not: the speaker they were renamed to, the file
     name, a comment, the participant notes. Speakers whose label holds PII
     become "Speaker N" (by order of appearance, so blocks stay apart); a
-    recording name that holds any becomes "Recording N". Any detector failure
+    recording name that holds any becomes "Recording N". Tags and comments are
+    moved onto the redacted text (``_AnchorRemap``). Any detector failure
     raises PIIError and the export stops: nothing goes out half-redacted.
 
-    Returns ``(segments, comments, notes, title)``.
+    Only the export's copies change; annotation files on disk are untouched.
+
+    Returns ``(segments, tag_spans, comments, notes, title)``.
     """
     import re
 
-    from .pii_service import PIIError, _load_model, detect_pii, redact_segments, redact_text
+    from .pii_service import (
+        PIIError,
+        _load_model,
+        detect_pii,
+        redact_segments_with_offsets,
+        redact_text,
+    )
 
+    original_segments = segments
     try:
         _load_model(app)
         threshold = float(Setting.get('pii_threshold', '0.8'))
-        segments = redact_segments(segments, threshold=threshold)
+        segments, offset_maps = redact_segments_with_offsets(segments, threshold=threshold)
     except PIIError:
         raise
     except Exception as exc:
@@ -699,7 +789,17 @@ def _remove_pii_for_export(app, recording, segments, comments, notes, ordinal):
             for seg in segments
         ]
 
-    comments = [dict(c, text=redact(c.get('text', ''))) for c in comments]
+    remap = _AnchorRemap(original_segments, segments, offset_maps)
+
+    def moved(span):
+        out = remap.span(span)
+        # The fallback text a renderer shows for an anchor with no width.
+        if out.get('anchor_text'):
+            out['anchor_text'] = redact(out['anchor_text'])
+        return out
+
+    tag_spans = [moved(t) for t in tag_spans]
+    comments = [dict(moved(c), text=redact(c.get('text', ''))) for c in comments]
     notes = redact(notes)
 
     title = recording.original_name or ''
@@ -708,7 +808,7 @@ def _remove_pii_for_export(app, recording, segments, comments, notes, ordinal):
     if redact(readable) != readable or redact(title) != title:
         title = f'Recording {ordinal}'
 
-    return segments, comments, notes, title
+    return segments, tag_spans, comments, notes, title
 
 
 def export_recording_markdown(app, project_id, recording_id, opts):
@@ -752,8 +852,9 @@ def export_recording_markdown(app, project_id, recording_id, opts):
         notes = (recording.participant_notes or '').strip() or '—'
         title = recording.original_name
         if remove_pii:
-            segments, comments, notes, title = _remove_pii_for_export(
-                current_app._get_current_object(), recording, segments, comments, notes, 1,
+            segments, tag_spans, comments, notes, title = _remove_pii_for_export(
+                current_app._get_current_object(), recording, segments, tag_spans, comments,
+                notes, 1,
             )
 
         lines = [f'# {project.name}']
@@ -849,9 +950,9 @@ def export_project_markdown(app, project_id, recording_ids, opts):
             notes = (recording.participant_notes or '').strip() or '—'
             title = recording.original_name
             if remove_pii:
-                segments, comments, notes, title = _remove_pii_for_export(
-                    current_app._get_current_object(), recording, segments, comments, notes,
-                    exported + 1,
+                segments, tag_spans, comments, notes, title = _remove_pii_for_export(
+                    current_app._get_current_object(), recording, segments, tag_spans, comments,
+                    notes, exported + 1,
                 )
 
             lines.append(f'# {title} (Transcript)')
