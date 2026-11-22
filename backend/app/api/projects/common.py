@@ -4,6 +4,7 @@ The blueprint object lives here rather than in ``__init__`` so the route
 modules can import it without importing the package that imports them.
 """
 
+import logging
 import os
 import re
 import subprocess
@@ -17,7 +18,9 @@ from ...services.annotations import (
     annotation_recording_ref,
     annotations_filename,
 )
-from ...services.file_utils import atomic_write_text
+from ...services.file_utils import atomic_write_text, safe_child_path, safe_project_dir
+
+log = logging.getLogger(__name__)
 
 projects_bp = Blueprint('projects', __name__)
 
@@ -99,15 +102,45 @@ def _write_project_readme(project):
 def _projects_root():
     return Setting.get('projects_path', current_app.config['DEFAULT_PROJECTS_PATH'])
 
+def _project_dir_or_none(project):
+    """The project's folder, or None if its folder_name leads out of the root.
+
+    A row like that can only come from a restore made before archive paths
+    were checked. Deleting, moving or serving through it would act on
+    whatever the archive named, so the callers skip the file work instead.
+    """
+    try:
+        return safe_project_dir(_projects_root(), project.folder_name)
+    except ValueError:
+        log.warning('Project %s has an unsafe folder_name %r; skipping its files',
+                    project.id, project.folder_name)
+        return None
+
+def _project_file_or_none(project_dir, rel_path):
+    """*rel_path* inside *project_dir*, or None if it would leave it."""
+    if not project_dir:
+        return None
+    try:
+        return safe_child_path(project_dir, rel_path)
+    except ValueError:
+        log.warning('Refusing a path outside %s: %r', project_dir, rel_path)
+        return None
+
 def _recording_filepath(project, recording):
     """Return the absolute path to the media file for a recording.
 
     Linked recordings store the absolute path directly in stored_name.
-    Copied recordings store just the filename relative to the project folder.
+    Copied recordings store just the filename relative to the project folder;
+    one whose stored_name points outside that folder returns None. So does a
+    link to anything but media, which linking itself never creates.
     """
     if recording.is_linked:
+        if _ext_of(recording.stored_name) not in ALLOWED_EXTENSIONS:
+            log.warning('Recording %s links to a non-media path %r; not serving it',
+                        recording.id, recording.stored_name)
+            return None
         return recording.stored_name
-    return os.path.join(_projects_root(), project.folder_name, recording.stored_name)
+    return _project_file_or_none(_project_dir_or_none(project), recording.stored_name)
 
 def _delete_recording_annotation_files(project_dir, recording):
     """Delete both current and legacy annotation files for a recording."""
@@ -118,8 +151,8 @@ def _delete_recording_annotation_files(project_dir, recording):
     for ref in refs:
         if not ref:
             continue
-        ann_path = os.path.join(project_dir, annotations_filename(ref))
-        if os.path.isfile(ann_path):
+        ann_path = _project_file_or_none(project_dir, annotations_filename(ref))
+        if ann_path and os.path.isfile(ann_path):
             os.remove(ann_path)
 
 def _safe_folder_name(name, existing_names=None):

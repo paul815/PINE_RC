@@ -1196,7 +1196,8 @@ function buildCustomBlockHtml(block, pid, isSummary) {
   const attrKey = isSummary ? 'data-summary-key' : 'data-section-key';
   const removeFn = isSummary ? 'removeSummarySection' : 'removeSection';
   const rmBtn = `<button class="icon-btn icon-btn-danger" onclick="${removeFn}(${escJsAttr(block.id)},${pid})" title="Remove section">${SVG_RM}</button>`;
-  return `<div class="field-card draggable" ${attrKey}="${block.id}" draggable="true"><div class="label"><span class="custom-block-title" contenteditable="true" spellcheck="false" data-block-id="${block.id}" data-project-id="${pid}" data-summary="${isSummary ? '1' : ''}">${esc(block.title || 'Other')}</span> ${rmBtn}</div><div class="value${(block.content || '') ? '' : ' empty'}" id="field-${block.id}" contenteditable="true" spellcheck="false" data-field="${block.id}" data-project-id="${pid}" data-custom-block="1" data-summary="${isSummary ? '1' : ''}">${esc(block.content || '') || ''}</div></div>`;
+  const bid = block.id;
+  return `<div class="field-card draggable" ${attrKey}="${esc(bid)}" draggable="true"><div class="label"><span class="custom-block-title" contenteditable="true" spellcheck="false" data-block-id="${esc(bid)}" data-project-id="${pid}" data-summary="${isSummary ? '1' : ''}">${esc(block.title || 'Other')}</span> ${rmBtn}</div><div class="value${(block.content || '') ? '' : ' empty'}" id="field-${esc(bid)}" contenteditable="true" spellcheck="false" data-field="${esc(bid)}" data-project-id="${pid}" data-custom-block="1" data-summary="${isSummary ? '1' : ''}">${esc(block.content || '') || ''}</div></div>`;
 }
 
 function buildSummaryBlockHtml(key, pid, p) {
@@ -1443,7 +1444,7 @@ function renderDetail(p) {
     : '';
 
   const html = `
-  <div class="project-detail" id="projectDetail" data-enabled='${JSON.stringify(enabledSections)}' data-enabled-summary='${JSON.stringify(enabledSummarySections)}'>
+  <div class="project-detail" id="projectDetail" data-enabled="${esc(JSON.stringify(enabledSections))}" data-enabled-summary="${esc(JSON.stringify(enabledSummarySections))}">
     <div class="right-header">
       <div class="project-title-row">
         <div class="project-name-block">
@@ -1557,7 +1558,7 @@ function renderDetail(p) {
           <span class="save-status" id="summarySaveStatus-${p.id}" role="status" aria-live="polite"></span>
           ${addSummarySectionHtml}
         </div>
-        <div class="summary-cards-container" id="summaryCards-${p.id}" style="display:flex;flex-direction:column;gap:10px" data-enabled-summary='${JSON.stringify(enabledSummarySections)}'>
+        <div class="summary-cards-container" id="summaryCards-${p.id}" style="display:flex;flex-direction:column;gap:10px" data-enabled-summary="${esc(JSON.stringify(enabledSummarySections))}">
           ${summaryBlocksHtml}
         </div>
       </div>
@@ -2702,7 +2703,7 @@ function segCardHTML(s, pid) {
       <span>Target interviews:</span>
       <div class="seg-stepper">
         <button class="seg-stepper-btn" type="button" data-delta="-1" data-seg-id="${s.id}" data-pid="${pid}" aria-label="Decrease">−</button>
-        <input class="seg-target-input" type="number" min="0" value="${target}" data-seg-id="${s.id}" data-pid="${pid}" />
+        <input class="seg-target-input" type="number" min="0" value="${escNum(target)}" data-seg-id="${s.id}" data-pid="${pid}" />
         <button class="seg-stepper-btn" type="button" data-delta="1" data-seg-id="${s.id}" data-pid="${pid}" aria-label="Increase">+</button>
       </div>
       <span class="seg-assigned" style="${assignedColor}"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--muted-fg)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>${assigned} interview${assigned !== 1 ? 's' : ''} assigned</span>
@@ -3680,7 +3681,7 @@ function renderAttachments(pid, atts) {
   const list = document.getElementById('attList-' + pid);
   if (!list) return;
   list.innerHTML = atts.map(a => `
-    <div class="att-item" data-aid="${a.id}">
+    <div class="att-item" data-aid="${esc(a.id)}">
       <div class="att-name-wrap">
         <span class="att-name" onclick="downloadAttachment(${pid},${escJsAttr(a.id)})" title="Download">${esc(a.display_name)}</span>
         <button class="icon-btn icon-btn-accent" onclick="startRenameAttachment(${pid},${escJsAttr(a.id)})" title="Rename">${SVG_PENCIL}</button>

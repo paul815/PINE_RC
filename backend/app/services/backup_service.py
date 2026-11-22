@@ -3,7 +3,9 @@
 import hashlib
 import json
 import logging
+import ntpath
 import os
+import posixpath
 import re
 import shutil
 import tempfile
@@ -12,7 +14,6 @@ import time
 import zipfile
 from datetime import UTC, datetime
 from glob import glob
-from pathlib import PurePosixPath
 
 from ..extensions import db, socketio
 from ..models.project import Project
@@ -20,6 +21,9 @@ from ..models.recording import Recording
 from ..models.segment import Segment
 from ..models.setting import Setting
 from .annotations import annotations_filename
+from .file_utils import safe_child_path, safe_project_dir
+from .multitrack_ingest import TRACK_EXTENSIONS
+from .setting_rules import RESTORABLE_SETTINGS, clean_setting
 
 log = logging.getLogger(__name__)
 
@@ -30,9 +34,9 @@ _auto_backup_lock = threading.Lock()
 
 # Settings keys that belong to *this* installation, not to the backup.
 #
-# They are filtered in both directions. On restore, because a backup must not
-# repoint this install at another machine's paths. On write, because a backup
-# ZIP travels: onto a USB stick, into a cloud-synced folder, to whoever the user
+# Left out on write. (A restore goes further and takes only the preferences in
+# setting_rules.RESTORABLE_SETTINGS, so a backup cannot repoint this install
+# at another machine's paths.) A backup ZIP travels: onto a USB stick, into a cloud-synced folder, to whoever the user
 # asks for help. hf_token is a live HuggingFace credential, and models_path /
 # projects_path are local filesystem layout — neither has any business leaving
 # the machine inside an archive nobody expects to hold secrets.
@@ -55,7 +59,14 @@ def _backup_dir(app):
 
 def _external_safety_backup_dir():
     path = os.path.join(tempfile.gettempdir(), 'pine_safety_backups')
-    os.makedirs(path, exist_ok=True)
+    os.makedirs(path, mode=0o700, exist_ok=True)
+    # Snapshots hold every project with its audio, and on Linux this sits in a
+    # shared /tmp; makedirs' mode does not touch a folder that already exists.
+    # On Windows the user's own %TEMP% already keeps others out.
+    try:
+        os.chmod(path, 0o700)
+    except OSError:
+        log.warning('Could not restrict permissions on %s', path)
     return path
 
 
@@ -130,11 +141,35 @@ def _backup_audio_name(recording):
     return f'{_safe_archive_leaf(base, "recording")}_{recording.id}{ext.lower()}'
 
 
+def _is_linkable_media(path):
+    """Whether *path* can be the target of a linked recording.
+
+    Linking only ever accepts absolute paths to media; holding a restored or
+    stored link to the same rule keeps a crafted row from turning the backup
+    into a way to copy any file off the machine. Absolute by either OS's
+    rules, because backups move between the Windows and Mac machines and a
+    link from the other one must not sink the whole restore.
+    """
+    path = path or ''
+    ext = os.path.splitext(path)[1].lstrip('.').lower()
+    is_abs = ntpath.isabs(path) or posixpath.isabs(path)
+    return bool(path) and is_abs and ext in TRACK_EXTENSIONS
+
+
+def _inside_or_none(root, rel_path):
+    try:
+        return safe_child_path(root, rel_path)
+    except ValueError:
+        log.warning('Backup skipped a path outside %s: %r', root, rel_path)
+        return None
+
+
 def _serialize_recording_for_backup(recording, include_audio):
     data = recording.to_dict()
     if recording.is_linked:
         data['linked_source_path'] = recording.stored_name
-        if include_audio and os.path.isfile(recording.stored_name):
+        if (include_audio and _is_linkable_media(recording.stored_name)
+                and os.path.isfile(recording.stored_name)):
             data['backup_archived_audio_name'] = _backup_audio_name(recording)
     return data
 
@@ -193,19 +228,40 @@ def validate_backup_zip(zip_path):
 
 
 def _safe_restore_path(root, rel_path):
-    parts = []
-    for part in PurePosixPath((rel_path or '').replace('\\', '/')).parts:
-        if part in ('', '.'):
-            continue
-        if part == '..' or ':' in part:
-            raise ValueError(f'Unsafe archive path: {rel_path}')
-        parts.append(part)
+    return safe_child_path(root, rel_path)
 
-    dest = os.path.abspath(os.path.join(root, *parts))
-    root_abs = os.path.abspath(root)
-    if os.path.commonpath([root_abs, dest]) != root_abs:
-        raise ValueError(f'Archive entry escapes target directory: {rel_path}')
-    return dest
+
+def _validate_restore_paths(projects_data, projects_root):
+    """Refuse an archive whose paths would reach outside the projects root.
+
+    Everything in ``db/projects.json`` is the archive author's to choose, and
+    the manifest checksums are too, so a backup is checked like any other
+    outside input. ``folder_name`` decides where files are written and, on a
+    failed restore, what gets removed; ``stored_name`` and ``transcript_path``
+    become DB rows that the media, delete and backup code later follow. Runs
+    before anything is written, so a refused archive changes nothing.
+    """
+    for pdata in projects_data:
+        folder = pdata.get('folder_name')
+        project_dir = safe_project_dir(projects_root, folder)
+
+        for rdata in pdata.get('recordings', []):
+            stored_name = rdata.get('stored_name') or ''
+            archived = (rdata.get('backup_archived_audio_name') or '').strip()
+            if rdata.get('is_linked', False) and not archived:
+                # A link to media outside PINE (a Zoom folder, an external
+                # drive) is legitimate — but only to media, never to a file
+                # the next backup would then sweep up and carry off.
+                if not _is_linkable_media(stored_name):
+                    raise ValueError(
+                        f'Unsafe linked recording in project {folder!r}: {stored_name!r}'
+                    )
+            else:
+                safe_child_path(project_dir, archived or stored_name)
+
+            transcript_path = rdata.get('transcript_path') or ''
+            if transcript_path:
+                safe_child_path(project_dir, transcript_path)
 
 
 def _stage_project_files(zf, original_folder, staging_root):
@@ -360,7 +416,13 @@ def _create_backup_inner(app, include_audio, project_folders=None, label=None,
         )
 
         for project in projects:
-            project_dir = os.path.join(projects_root, project.folder_name)
+            try:
+                project_dir = safe_project_dir(projects_root, project.folder_name)
+            except ValueError:
+                log.warning('Backup skipped files of project %s: unsafe folder_name %r',
+                            project.id, project.folder_name)
+                progress('files', f'Skipping {project.name} (unsafe folder)')
+                continue
             if not os.path.isdir(project_dir):
                 progress('files', f'Skipping {project.name} (no folder)')
                 continue
@@ -388,8 +450,8 @@ def _create_backup_inner(app, include_audio, project_folders=None, label=None,
 
             for recording in project.recordings:
                 if recording.transcript_path:
-                    transcript_path = os.path.join(project_dir, recording.transcript_path)
-                    if os.path.isfile(transcript_path):
+                    transcript_path = _inside_or_none(project_dir, recording.transcript_path)
+                    if transcript_path and os.path.isfile(transcript_path):
                         _write_file_with_checksum(
                             zf,
                             transcript_path,
@@ -405,11 +467,12 @@ def _create_backup_inner(app, include_audio, project_folders=None, label=None,
                 if include_audio:
                     archived_audio_name = recording.stored_name
                     if recording.is_linked:
-                        audio_file = recording.stored_name
+                        audio_file = (recording.stored_name
+                                      if _is_linkable_media(recording.stored_name) else None)
                         archived_audio_name = _backup_audio_name(recording)
                     else:
-                        audio_file = os.path.join(project_dir, recording.stored_name)
-                    if os.path.isfile(audio_file):
+                        audio_file = _inside_or_none(project_dir, recording.stored_name)
+                    if audio_file and os.path.isfile(audio_file):
                         _write_file_with_checksum(
                             zf,
                             audio_file,
@@ -597,6 +660,8 @@ def _restore_inner(app, filename, project_folders, restore_settings, conflict_st
                 wanted = set(project_folders)
                 projects_data = [pdata for pdata in projects_data if pdata['folder_name'] in wanted]
 
+            _validate_restore_paths(projects_data, projects_root)
+
             existing_targets = []
             for pdata in projects_data:
                 if Project.query.filter_by(folder_name=pdata['folder_name']).first() is not None:
@@ -613,9 +678,18 @@ def _restore_inner(app, filename, project_folders, restore_settings, conflict_st
 
             if restore_settings and 'db/settings.json' in zf.namelist():
                 settings_json = json.loads(zf.read('db/settings.json'))
+                if not isinstance(settings_json, dict):
+                    settings_json = {}
                 for key, value in settings_json.items():
-                    if key not in _SENSITIVE_KEYS:
-                        _set_setting_value(key, value)
+                    # Preferences only, and only in a valid shape: see
+                    # RESTORABLE_SETTINGS for what stays with this machine.
+                    if key not in RESTORABLE_SETTINGS:
+                        continue
+                    cleaned = clean_setting(key, value)
+                    if cleaned is None:
+                        log.warning('Restore skipped setting %s: invalid value', key)
+                        continue
+                    _set_setting_value(key, cleaned)
                 settings_restored = True
                 _emit('backup:restore_progress', {
                     'stage': 'settings',
@@ -629,7 +703,7 @@ def _restore_inner(app, filename, project_folders, restore_settings, conflict_st
                 original_folder = pdata['folder_name']
                 folder = original_folder
                 existing = Project.query.filter_by(folder_name=folder).first()
-                final_dir = os.path.join(projects_root, folder)
+                final_dir = safe_project_dir(projects_root, folder)
                 # A folder can sit on disk with no DB row behind it: a project
                 # deleted from the UI whose files survived, a hand-copied
                 # folder, or the leftovers of an interrupted restore. That
@@ -659,7 +733,7 @@ def _restore_inner(app, filename, project_folders, restore_settings, conflict_st
                             counter += 1
                             candidate = f'{folder}_restored_{counter}'
                         folder = candidate
-                        final_dir = os.path.join(projects_root, folder)
+                        final_dir = safe_project_dir(projects_root, folder)
 
                 stage_dir = _stage_project_files(zf, original_folder, staging_root)
 
@@ -771,6 +845,9 @@ def _restore_inner(app, filename, project_folders, restore_settings, conflict_st
                     raise FileExistsError(f'Restore target already exists: {final_dir}')
                 if os.path.isdir(action['stage_dir']):
                     os.replace(action['stage_dir'], final_dir)
+                    # Only a folder this restore put in place is its to remove
+                    # on rollback; anything else at final_dir belongs to the user.
+                    action['placed'] = True
 
             db.session.commit()
 
@@ -803,10 +880,16 @@ def _restore_inner(app, filename, project_folders, restore_settings, conflict_st
         for action in reversed(project_file_actions):
             final_dir = action.get('final_dir')
             backup_existing_dir = action.get('backup_existing_dir')
-            if final_dir and os.path.isdir(final_dir):
+            if action.get('placed') and final_dir and os.path.isdir(final_dir):
                 shutil.rmtree(final_dir, ignore_errors=True)
             if backup_existing_dir and os.path.isdir(backup_existing_dir):
-                os.replace(backup_existing_dir, final_dir)
+                if os.path.exists(final_dir):
+                    log.warning(
+                        'Restore rollback could not clear %s; previous contents kept at %s',
+                        final_dir, backup_existing_dir,
+                    )
+                else:
+                    os.replace(backup_existing_dir, final_dir)
         raise
     finally:
         shutil.rmtree(staging_root, ignore_errors=True)

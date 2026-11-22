@@ -21,6 +21,8 @@ from ..models.segment import Segment
 from ..models.setting import Setting
 from ..ports import supervisor_port
 from ..services.export_service import DEFAULT_EXPORT_PROMPT, DEFAULT_EXPORT_PROMPT_RECORDING
+from ..services.file_utils import safe_project_dir
+from ..services.setting_rules import clean_setting
 from ..services.launcher_layout import (
     INSTALLER_STORAGE_DIR,
     restore_default_launcher_layout_after_reset,
@@ -92,8 +94,6 @@ ALLOWED_KEYS = {
     'transcription_complete_sound_volume',
     'app_launch_prompt_dismissed',
 }
-
-ALLOWED_FONT_FAMILIES = {'system', 'inter', 'source-sans-3', 'open-sans', 'roboto'}
 
 DEFAULTS = {
     'font_size': '13',
@@ -909,9 +909,9 @@ def update_settings():
 
     for key in ALLOWED_KEYS:
         if key in data:
-            value = str(data[key]).strip()
-            if key == 'font_family' and value not in ALLOWED_FONT_FAMILIES:
-                continue  # reject invalid font_family
+            value = clean_setting(key, data[key])
+            if value is None:
+                continue  # rejected: font_size, font_family, sound volume
             if key == 'last_open_project_id' and value and not value.isdigit():
                 continue  # reject non-numeric project id
             if key == 'stt_model_id':
@@ -923,14 +923,6 @@ def update_settings():
                         'error': f'Model "{value}" is not installed yet',
                         'stt_model_id': value,
                     }), 409
-            if key == 'transcription_complete_sound_volume':
-                try:
-                    iv = int(value)
-                    if iv < 0 or iv > 100:
-                        continue
-                except ValueError:
-                    continue
-                value = str(iv)
             Setting.set(key, value)
             updated[key] = value
 
@@ -1072,15 +1064,19 @@ def reset_all_data():
         backup_dir=_external_safety_backup_dir(),
     )
 
-    # Delete all project folders from disk
-    if os.path.isdir(projects_path):
-        for name in os.listdir(projects_path):
-            path = os.path.join(projects_path, name)
-            if os.path.isdir(path):
-                try:
-                    shutil.rmtree(path)
-                except OSError:
-                    pass
+    # Delete the folders of the projects PINE knows about, not every subfolder:
+    # a projects path picked at onboarding may be an existing folder that
+    # already held other things, and those are not PINE's to remove.
+    for project in Project.query.all():
+        try:
+            path = safe_project_dir(projects_path, project.folder_name)
+        except ValueError:
+            continue
+        if os.path.isdir(path):
+            try:
+                shutil.rmtree(path)
+            except OSError:
+                pass
 
     # Delete all DB records: clear segment refs, then segments, recordings, then projects
     Recording.query.update({Recording.segment_id: None})

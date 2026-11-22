@@ -5,6 +5,7 @@ import json
 import os
 import tempfile
 import time
+from pathlib import PurePosixPath
 
 from . import windows_io
 
@@ -191,6 +192,54 @@ def save_upload_atomically(file_storage, path):
         except OSError:
             pass
         raise
+
+
+def safe_child_path(root, rel_path):
+    """Resolve *rel_path* under *root*, or raise ``ValueError`` if it leaves it.
+
+    For names that come from outside the process — a backup archive, a DB row
+    a restore wrote — where an absolute path, a drive letter or a ``..`` would
+    otherwise walk ``os.path.join`` straight out of *root*. Both separators
+    count; an empty *rel_path* resolves to *root* itself.
+    """
+    parts = []
+    for part in PurePosixPath((rel_path or '').replace('\\', '/')).parts:
+        if part in ('', '.'):
+            continue
+        if part == '..' or ':' in part or '\0' in part:
+            raise ValueError(f'Unsafe path: {rel_path!r}')
+        parts.append(part)
+
+    root_abs = os.path.abspath(root)
+    dest = os.path.abspath(os.path.join(root_abs, *parts))
+    try:
+        inside = os.path.commonpath([root_abs, dest]) == root_abs
+    except ValueError:  # different drives on Windows
+        inside = False
+    if not inside:
+        raise ValueError(f'Path escapes {root_abs!r}: {rel_path!r}')
+    return dest
+
+
+def safe_project_dir(projects_root, folder_name):
+    """Return the directory of the project folder *folder_name*, or raise.
+
+    A project folder is exactly one path component naming a direct child of
+    *projects_root*. Anything else — empty, ``.``/``..``, a separator, a drive,
+    or a trailing dot or space, which Windows strips so that ``'.. '`` becomes
+    ``'..'`` — raises ``ValueError``. Callers that delete or move the folder
+    must go through this rather than ``os.path.join``.
+    """
+    name = folder_name if isinstance(folder_name, str) else ''
+    if (not name or name in ('.', '..') or name != name.rstrip('. ')
+            or any(ch in name for ch in '/\\:\0')):
+        raise ValueError(f'Unsafe project folder name: {folder_name!r}')
+
+    root_abs = os.path.abspath(projects_root)
+    dest = os.path.abspath(os.path.join(root_abs, name))
+    if os.path.dirname(dest) != root_abs:
+        raise ValueError(f'Unsafe project folder name: {folder_name!r}')
+    return dest
 
 
 def claim_free_path(directory, filename, max_tries=10000):

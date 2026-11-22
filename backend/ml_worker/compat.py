@@ -185,13 +185,69 @@ def patch_hf_hub_is_offline_mode():
 _TORCH_LOAD_TRUST_PATCHED = False
 
 
+def _checkpoint_path(f):
+    """The filesystem path torch.load was given, directly or as an open file's name."""
+    if isinstance(f, (str, os.PathLike)):
+        return os.fspath(f)
+    name = getattr(f, 'name', None)
+    return name if isinstance(name, str) else None
+
+
+def _is_inside(path, root):
+    try:
+        return os.path.commonpath([path, root]) == root
+    except ValueError:  # different drives on Windows
+        return False
+
+
+def _shared_download_caches():
+    """Caches any library fills from the internet on its own, outside PINE's models folder."""
+    roots = []
+    try:
+        from huggingface_hub import constants as hf_constants
+        roots.append(hf_constants.HF_HUB_CACHE)
+    except Exception:
+        pass
+    try:
+        import torch.hub
+        roots.append(torch.hub.get_dir())
+    except Exception:
+        pass
+    return [os.path.abspath(r) for r in roots if r]
+
+
+def _from_shared_download_cache(f):
+    """True for a checkpoint that came from the HF hub cache or torch.hub.
+
+    Those hold what whisperx fetches on first use of a language — alignment
+    models from personal Hugging Face accounts, as pickle — so they keep the
+    caller's weights_only. PINE's own pyannote cache wins even if a user put
+    it inside the HF cache. A stream with no name is not one of these: it keeps
+    the old, relaxed behaviour so a pyannote load handed over as a file object
+    still works.
+    """
+    path = _checkpoint_path(f)
+    if not path:
+        return False
+    path = os.path.abspath(path)
+    pyannote_cache = os.environ.get('PYANNOTE_CACHE', '').strip()
+    if pyannote_cache and _is_inside(path, os.path.abspath(pyannote_cache)):
+        return False
+    return any(_is_inside(path, root) for root in _shared_download_caches())
+
+
 def patch_torch_load_for_trusted_checkpoints():
     """Force weights_only=False on torch.load for pyannote/Lightning checkpoints.
 
-    PyTorch 2.6+ tightened unpickling; HF/pyannote checkpoints embed many custom types.
-    PINE only loads models the user installed during onboarding (local, trusted),
-    and this patch lives in the ML worker process only — the Flask backend keeps
-    the strict default.
+    PyTorch 2.6+ tightened unpickling; pyannote checkpoints embed many custom
+    types. PINE trusts the models it installed during onboarding into its own
+    models folder, and this patch lives in the ML worker process only — the
+    Flask backend keeps the strict default.
+
+    It does not reach the shared download caches (see
+    ``_from_shared_download_cache``): forcing it there let an alignment model
+    from a personal HF account run code through its pickle. transformers asks
+    for weights_only=True on those and now gets it.
 
     Set PINE_TORCH_STRICT_WEIGHTS_ONLY=1 to skip this patch (not recommended for pyannote).
     """
@@ -211,13 +267,16 @@ def patch_torch_load_for_trusted_checkpoints():
 
     @functools.wraps(_orig)
     def _load(*args, **kwargs):
-        kwargs['weights_only'] = False
+        f = args[0] if args else kwargs.get('f')
+        if not _from_shared_download_cache(f):
+            kwargs['weights_only'] = False
         return _orig(*args, **kwargs)
 
     _load._pine_trusted_checkpoint_wrap = True
     torch.load = _load
     _TORCH_LOAD_TRUST_PATCHED = True
-    log.debug('torch.load → weights_only=False for trusted onboarding checkpoints')
+    log.debug('torch.load → weights_only=False for trusted onboarding checkpoints '
+              '(not for the shared HF / torch.hub caches)')
 
 
 @contextmanager

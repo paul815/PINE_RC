@@ -643,6 +643,63 @@ def _build_project_header(project):
     return lines
 
 
+def _remove_pii_for_export(app, recording, segments, comments, notes, ordinal):
+    """Redact what an export of *recording* would otherwise carry out by name.
+
+    The transcript text was always covered. A respondent's name more often sits
+    in the places that were not: the speaker they were renamed to, the file
+    name, a comment, the participant notes. Speakers whose label holds PII
+    become "Speaker N" (by order of appearance, so blocks stay apart); a
+    recording name that holds any becomes "Recording N". Any detector failure
+    raises PIIError and the export stops: nothing goes out half-redacted.
+
+    Returns ``(segments, comments, notes, title)``.
+    """
+    import re
+
+    from .pii_service import PIIError, _load_model, detect_pii, redact_segments, redact_text
+
+    try:
+        _load_model(app)
+        threshold = float(Setting.get('pii_threshold', '0.8'))
+        segments = redact_segments(segments, threshold=threshold)
+    except PIIError:
+        raise
+    except Exception as exc:
+        raise PIIError(f'PII removal failed: {exc}') from exc
+
+    def redact(text):
+        if not text:
+            return text
+        entities = detect_pii(text, threshold=threshold)
+        return redact_text(text, entities) if entities else text
+
+    speakers = []
+    for seg in segments:
+        spk = seg.get('speaker') or ''
+        if spk and spk not in speakers:
+            speakers.append(spk)
+    pseudonyms = {
+        spk: f'Speaker {n}' for n, spk in enumerate(speakers, 1) if redact(spk) != spk
+    }
+    if pseudonyms:
+        segments = [
+            dict(seg, speaker=pseudonyms.get(seg.get('speaker'), seg.get('speaker')))
+            for seg in segments
+        ]
+
+    comments = [dict(c, text=redact(c.get('text', ''))) for c in comments]
+    notes = redact(notes)
+
+    title = recording.original_name or ''
+    # File names join words with _ - . which hides a name from the detector.
+    readable = re.sub(r'[_.\-]+', ' ', os.path.splitext(title)[0]).strip()
+    if redact(readable) != readable or redact(title) != title:
+        title = f'Recording {ordinal}'
+
+    return segments, comments, notes, title
+
+
 def export_recording_markdown(app, project_id, recording_id, opts):
     """Export a single recording to Markdown."""
     with app.app_context():
@@ -679,32 +736,27 @@ def export_recording_markdown(app, project_id, recording_id, opts):
                 if spk and spk in speaker_labels:
                     seg['speaker'] = speaker_labels[spk]
 
+        tag_spans = ann.get('tag_spans', [])
+        comments = ann.get('comments', [])
+        notes = (recording.participant_notes or '').strip() or '—'
+        title = recording.original_name
         if remove_pii:
-            from .pii_service import PIIError, _load_model, redact_segments
-            try:
-                _load_model(current_app._get_current_object())
-                pii_thresh = float(Setting.get('pii_threshold', '0.8'))
-                segments = redact_segments(segments, threshold=pii_thresh)
-            except PIIError:
-                raise
-            except Exception as exc:
-                raise PIIError(f'PII removal failed: {exc}') from exc
+            segments, comments, notes, title = _remove_pii_for_export(
+                current_app._get_current_object(), recording, segments, comments, notes, 1,
+            )
 
         lines = [f'# {project.name}']
         if include_project_details:
             lines += _build_project_header(project)
 
-        lines.append(f'# {recording.original_name} (Transcript)')
+        lines.append(f'# {title} (Transcript)')
         if include_participant_details and not project.is_system:
             seg = db.session.get(Segment, recording.segment_id) if recording.segment_id else None
             segment_name = _segment_export_line(seg)
-            notes = (recording.participant_notes or '').strip() or '—'
             lines += ['## Segment', segment_name]
             lines += ['## Additional details', notes]
         lines.append('')
 
-        tag_spans = ann.get('tag_spans', [])
-        comments = ann.get('comments', [])
         merged_blocks = _merge_consecutive_speakers(segments)
         lines += _render_transcript_blocks(
             segments, merged_blocks, tag_spans, comments, tag_map, include_tags, include_comments
@@ -781,28 +833,24 @@ def export_project_markdown(app, project_id, recording_ids, opts):
                     if spk and spk in speaker_labels:
                         seg['speaker'] = speaker_labels[spk]
 
+            tag_spans = ann.get('tag_spans', [])
+            comments = ann.get('comments', [])
+            notes = (recording.participant_notes or '').strip() or '—'
+            title = recording.original_name
             if remove_pii:
-                from .pii_service import PIIError, _load_model, redact_segments
-                try:
-                    _load_model(current_app._get_current_object())
-                    pii_thresh = float(Setting.get('pii_threshold', '0.8'))
-                    segments = redact_segments(segments, threshold=pii_thresh)
-                except PIIError:
-                    raise
-                except Exception as exc:
-                    raise PIIError(f'PII removal failed: {exc}') from exc
+                segments, comments, notes, title = _remove_pii_for_export(
+                    current_app._get_current_object(), recording, segments, comments, notes,
+                    exported + 1,
+                )
 
-            lines.append(f'# {recording.original_name} (Transcript)')
+            lines.append(f'# {title} (Transcript)')
             if include_participant_details and not project.is_system:
                 seg = db.session.get(Segment, recording.segment_id) if recording.segment_id else None
                 segment_name = _segment_export_line(seg)
-                notes = (recording.participant_notes or '').strip() or '—'
                 lines += ['## Segment', segment_name]
                 lines += ['## Additional details', notes]
             lines.append('')
 
-            tag_spans = ann.get('tag_spans', [])
-            comments = ann.get('comments', [])
             merged_blocks = _merge_consecutive_speakers(segments)
             lines += _render_transcript_blocks(
                 segments, merged_blocks, tag_spans, comments, tag_map, include_tags, include_comments
@@ -834,7 +882,7 @@ def export_project_odt(app, project_id, recording_ids, opts):
 
 def _markdown_to_odt(md_text):
     """Convert markdown to minimal ODT (OpenDocument Text) XML."""
-    import tempfile
+    import io
     import zipfile
 
     content = _md_to_odt_content(md_text)
@@ -848,14 +896,15 @@ def _markdown_to_odt(md_text):
 <office:document-styles xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" office:version="1.2">
  <office:styles/>
 </office:document-styles>'''
-    with tempfile.NamedTemporaryFile(suffix='.odt', delete=False) as f:
-        with zipfile.ZipFile(f.name, 'w', zipfile.ZIP_DEFLATED) as zf:
-            zf.writestr('mimetype', 'application/vnd.oasis.opendocument.text', zipfile.ZIP_STORED)
-            zf.writestr('content.xml', content)
-            zf.writestr('styles.xml', styles)
-            zf.writestr('META-INF/manifest.xml', manifest)
-        with open(f.name, 'rb') as rf:
-            return rf.read()
+    # Built in memory: the temp file this used to go through was never removed,
+    # so every export left a copy of the transcript in the system temp folder.
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr('mimetype', 'application/vnd.oasis.opendocument.text', zipfile.ZIP_STORED)
+        zf.writestr('content.xml', content)
+        zf.writestr('styles.xml', styles)
+        zf.writestr('META-INF/manifest.xml', manifest)
+    return buf.getvalue()
 
 
 def _parse_bold_to_odt(text):

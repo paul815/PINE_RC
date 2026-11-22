@@ -228,8 +228,23 @@ def set_stt_model():
     return jsonify({'ok': True, 'stt_model_id': stt_model_id, 'total_size_bytes': total, 'model_ids': model_ids})
 
 
+def _refuse_after_onboarding():
+    """409 once setup is finished, else None.
+
+    These steps repoint where PINE keeps projects and models and replace the
+    HuggingFace token. During setup that is their job; afterwards nothing in
+    the app calls them, and any local process could otherwise move the data.
+    """
+    if Setting.get('onboarding_complete', 'false') == 'true':
+        return jsonify({'error': 'Onboarding is already complete.'}), 409
+    return None
+
+
 @onboarding_bp.route('/storage', methods=['POST'])
 def set_storage():
+    refused = _refuse_after_onboarding()
+    if refused:
+        return refused
     data = request.get_json(force=True)
     models_path = data.get('models_path', '').strip()
     projects_path = data.get('projects_path', '').strip()
@@ -261,6 +276,9 @@ def set_storage():
 
 @onboarding_bp.route('/hf-token', methods=['POST'])
 def set_hf_token():
+    refused = _refuse_after_onboarding()
+    if refused:
+        return refused
     data = request.get_json(force=True)
     token = data.get('token', '').strip()
     if not token:

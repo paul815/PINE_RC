@@ -3,12 +3,14 @@
 import os
 import subprocess
 import sys
+import tempfile
 import threading
 
 from flask import Blueprint, current_app, jsonify, request
 from werkzeug.utils import secure_filename
 
 from ..models.setting import Setting
+from ..services.file_utils import claim_free_path
 from ..services.backup_service import (
     _backup_dir,
     create_backup,
@@ -182,14 +184,24 @@ def upload():
         backup_path = os.path.join(app.config.get('ROOT_DIR', ''), backup_path)
     os.makedirs(backup_path, exist_ok=True)
 
-    safe_name = secure_filename(file_obj.filename)
-    dest = os.path.join(backup_path, safe_name)
-    file_obj.save(dest)
+    safe_name = secure_filename(file_obj.filename) or 'uploaded_backup.zip'
 
-    manifest_data, error = validate_backup_zip(dest)
-    if error:
-        os.remove(dest)
-        return jsonify({'error': error}), 400
+    # Validate under a temporary name and only then claim a free final one.
+    # Saving straight to the uploaded name replaced any backup already called
+    # that, and a failed check then deleted the file — taking the original
+    # with it.
+    fd, tmp_path = tempfile.mkstemp(dir=backup_path, prefix='.upload-', suffix='.part')
+    os.close(fd)
+    try:
+        file_obj.save(tmp_path)
+        manifest_data, error = validate_backup_zip(tmp_path)
+        if error:
+            return jsonify({'error': error}), 400
+        dest, safe_name = claim_free_path(backup_path, safe_name)
+        os.replace(tmp_path, dest)
+    finally:
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
 
     return jsonify({
         'ok': True,

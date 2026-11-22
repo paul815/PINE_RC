@@ -957,7 +957,8 @@ function render() {
   }
   // Apply stored speaker color choices
   const speakerColors = ann.speaker_colors || {};
-  Object.entries(speakerColors).forEach(([name, cls]) => { _speakerClassMap[name] = cls; });
+  // The value becomes a class name inside markup, so only a real one is taken.
+  Object.entries(speakerColors).forEach(([name, cls]) => { if (_SPK_CLASSES.includes(cls)) _speakerClassMap[name] = cls; });
 
   renderTranscript(tx.segments || [], ann.tag_spans || [], ann.comments || []);
   renderTagsPane(tags, ann.tag_spans || [], tx.segments || []);
@@ -1103,7 +1104,7 @@ function renderTranscript(segments, tagSpans, comments) {
         const wEnd = Math.min(w.charEnd, chEnd);
         if (wStart > p) out += esc(text.slice(p, wStart));
         if (w.charStart >= chStart && w.charEnd <= chEnd) {
-          out += `<span class="word" data-start="${w.start}">${esc(w.word)}</span>`;
+          out += `<span class="word" data-start="${escNum(w.start, '')}">${esc(w.word)}</span>`;
         } else {
           out += esc(text.slice(wStart, wEnd));
         }
@@ -1159,7 +1160,7 @@ function renderTranscript(segments, tagSpans, comments) {
       if (s.type === 'tag') {
         const tag = tagMap[s.tag_id] || {};
         const col = tagColor(tag.color);
-        html += `<span class="tagged" style="background:${col}22;border-color:${col}" data-span="${JSON.stringify(s).replace(/"/g, '&quot;')}">${wrapWords(clippedStart, end)}</span>`;
+        html += `<span class="tagged" style="background:${col}22;border-color:${col}" data-span="${esc(JSON.stringify(s))}">${wrapWords(clippedStart, end)}</span>`;
       } else {
         const preview = esc((s.text || '').slice(0, 30));
         const endSegForDot = s.end_segment_idx != null ? s.end_segment_idx : s.segment_idx;
@@ -1174,7 +1175,7 @@ function renderTranscript(segments, tagSpans, comments) {
     if (pos < text.length) html += wrapWords(pos, text.length);
 
     const textHtml = html || esc(text);
-    return `<div class="utt ${cls}" data-idx="${firstIdx}" data-indices="${indices.join(',')}" data-start="${m.start}">
+    return `<div class="utt ${cls}" data-idx="${firstIdx}" data-indices="${indices.join(',')}" data-start="${escNum(m.start, '')}">
       <span class="utt-ts">${ts}</span>
       <div class="utt-inner">
         <span class="utt-spk" onclick="openSpeakerEdit(this)" title="Click to rename or change color">${esc(m.speaker || 'Speaker')}</span>
@@ -1226,14 +1227,14 @@ function renderTagsPane(tags, tagSpans, segments) {
   });
   quotesEl.innerHTML = quotes.map(q => {
     const sp = q.span;
-    const spanData = `data-span-id="${esc(sp.id || '')}" data-seg="${sp.segment_idx}" data-tag-id="${esc(sp.tag_id)}" data-start="${sp.start_char}" data-end="${sp.end_char}"`;
+    const spanData = `data-span-id="${esc(sp.id || '')}" data-seg="${escNum(sp.segment_idx, '')}" data-tag-id="${esc(sp.tag_id)}" data-start="${escNum(sp.start_char, '')}" data-end="${escNum(sp.end_char, '')}"`;
     // The server compared this anchor against the words it was taken from and
     // they no longer match, so the quote below is where the offsets point, not
     // necessarily what was coded. Say so rather than show it as if it were.
     const drifted = sp.anchor_drifted
       ? `<span class="q-drift" title="${esc('Coded as: ' + (sp.anchor_text || ''))}">edited since coding</span>`
       : '';
-    return `<div class="q-card${sp.anchor_drifted ? ' q-card-drifted' : ''}" ${spanData}><div class="q-card-content" onclick="seekTo(${q.start})"><div class="q-text">${esc(q.text)}</div><div class="q-meta"><span><span class="q-tag-dot" style="background:${tagColor(q.tag?.color)}"></span>${esc(q.tag?.name || '')}</span>${drifted}<span>${fmtTime(q.start)}</span></div></div><button type="button" class="icon-btn icon-btn-danger" onclick="event.stopPropagation();removeTagSpan(this)" title="Remove this code from selection">&times;</button></div>`;
+    return `<div class="q-card${sp.anchor_drifted ? ' q-card-drifted' : ''}" ${spanData}><div class="q-card-content" onclick="seekTo(${escNum(q.start, '')})"><div class="q-text">${esc(q.text)}</div><div class="q-meta"><span><span class="q-tag-dot" style="background:${tagColor(q.tag?.color)}"></span>${esc(q.tag?.name || '')}</span>${drifted}<span>${fmtTime(q.start)}</span></div></div><button type="button" class="icon-btn icon-btn-danger" onclick="event.stopPropagation();removeTagSpan(this)" title="Remove this code from selection">&times;</button></div>`;
   }).join('') || '<div class="empty-inline">No coded quotes yet. Highlight text to apply a code.</div>';
 }
 
@@ -1322,7 +1323,7 @@ function renderCommentsPane(comments, segments) {
         return seg ? (seg.text || '').slice(c.start_char, c.end_char) : '';
       })();
     const cid = c.id || '';
-    return `<div class="cmt-card" id="cmt-${cid}" data-comment-id="${esc(cid)}" onmouseenter="highlightCommentSpan(${escJsAttr(cid)}, true)" onmouseleave="highlightCommentSpan(${escJsAttr(cid)}, false)"><div class="cmt-card-content"><div class="cmt-anchor">"${esc(anchor)}"</div><div class="cmt-body">${esc(c.text || '')}</div><div class="cmt-meta">${c.created_at || '—'}</div></div><button type="button" class="icon-btn icon-btn-danger" onclick="event.stopPropagation();removeComment(this)" title="Remove this comment">&times;</button></div>`;
+    return `<div class="cmt-card" id="cmt-${esc(cid)}" data-comment-id="${esc(cid)}" onmouseenter="highlightCommentSpan(${escJsAttr(cid)}, true)" onmouseleave="highlightCommentSpan(${escJsAttr(cid)}, false)"><div class="cmt-card-content"><div class="cmt-anchor">"${esc(anchor)}"</div><div class="cmt-body">${esc(c.text || '')}</div><div class="cmt-meta">${esc(c.created_at || '—')}</div></div><button type="button" class="icon-btn icon-btn-danger" onclick="event.stopPropagation();removeComment(this)" title="Remove this comment">&times;</button></div>`;
   }).join('') || '<div class="empty-inline">No comments yet. Highlight text and click Add comment.</div>';
 }
 

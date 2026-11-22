@@ -38,6 +38,25 @@ IS_MAC = sys.platform == 'darwin'
 # PYTHONNOUSERSITE        — disables ~/.local / %APPDATA%\Python user site-packages.
 _PIP_ENV = {**os.environ, 'PIP_REQUIRE_VIRTUALENV': '1', 'PYTHONNOUSERSITE': '1'}
 
+# The pure-Python ML stack, at the versions mac-bench measured on 2026-11-21
+# (and requirements-lock.txt records for Windows). Both platforms install
+# exactly these, so a new PyPI release — broken or compromised — reaches no
+# install until someone moves the pin on purpose. torch and its companions are
+# not here: the Mac pins them in its own list, and on Windows torchruntime picks
+# the build for the GPU it finds. pyannote-audio floats on both, deliberately.
+SHARED_ML_PINS = {
+    'whisperx': '3.8.6',
+    'faster-whisper': '1.2.1',
+    'transformers': '4.57.6',
+    'huggingface-hub': '0.36.2',
+}
+
+MAC_PIP_INSTALL_TARGETS = [
+    'torch==2.8.0', 'torchaudio==2.8.0', 'torchvision==0.23.0',
+    *(f'{name}=={version}' for name, version in SHARED_ML_PINS.items()),
+    'ctranslate2==4.9.0', 'pyannote-audio',
+]
+
 if IS_MAC:
     # Apple Silicon runs the Windows engine — WhisperX + faster-whisper on
     # CTranslate2's Metal backend, which arrived in 4.9. Every version is the
@@ -57,11 +76,7 @@ if IS_MAC:
         ('ctranslate2', 'ctranslate2', 'Whisper runtime with Metal (4.9+)'),
         ('pyannote.audio', 'pyannote-audio', 'Speaker diarization (pyannote)'),
     ]
-    PIP_INSTALL_TARGETS = [
-        'torch==2.8.0', 'torchaudio==2.8.0', 'torchvision==0.23.0',
-        'whisperx==3.8.6', 'faster-whisper==1.2.1', 'ctranslate2==4.9.0',
-        'pyannote-audio', 'transformers==4.57.6', 'huggingface-hub==0.36.2',
-    ]
+    PIP_INSTALL_TARGETS = list(MAC_PIP_INSTALL_TARGETS)
 else:
     REQUIRED_PACKAGES = [
         ('torchruntime', 'torchruntime', 'GPU auto-detection'),
@@ -117,11 +132,14 @@ _MAC_TRANSCRIPTION_IMPORTS = [
 
 
 def _pinned(pip_name):
-    """On a Mac, the version PIP_INSTALL_TARGETS fixes for ``pip_name``, if any."""
+    """The pinned spec for ``pip_name`` on this platform, or the bare name."""
     if IS_MAC:
         for spec in PIP_INSTALL_TARGETS:
             if spec.split('==')[0] == pip_name:
                 return spec
+        return pip_name
+    if pip_name in SHARED_ML_PINS:
+        return f'{pip_name}=={SHARED_ML_PINS[pip_name]}'
     return pip_name
 
 _TRANSCRIPTION_IMPORTS = [
@@ -602,7 +620,7 @@ def install_pip_packages():
                 # --no-deps prevents whisperx's ``torch~=2.8.0`` pin from
                 # downgrading the GPU-enabled torch we installed in Phase 2.
                 _install_step('Phase 4/5: Installing whisperx (no-deps)', 'Step 4/5: whisperx')
-                success = _run_pip(['whisperx'], extra_args=['--no-deps'])
+                success = _run_pip([_pinned('whisperx')], extra_args=['--no-deps'])
 
             if success:
                 # Now pull whisperx's non-torch runtime deps.  faster-whisper
@@ -610,13 +628,13 @@ def install_pip_packages():
                 # pyannote-audio brings lightning, scikit-learn, etc.
                 _install_step('Phase 5/5: Installing whisperx dependencies', 'Step 5/5: whisperx deps')
                 success = _run_pip([
-                    'faster-whisper',
+                    _pinned('faster-whisper'),
                     'pyannote-audio',
-                    'transformers',
+                    _pinned('transformers'),
                     'nltk',
                     'pandas',
                     'omegaconf',
-                    'huggingface-hub<1.0.0',
+                    _pinned('huggingface-hub'),
                 ])
 
             if success and not _torch_companion_channels_aligned():

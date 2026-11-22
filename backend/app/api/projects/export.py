@@ -13,7 +13,12 @@ from ...services.annotations import (
     get_project_tags,
     get_project_themes,
 )
-from .common import _parse_bool, _projects_root, projects_bp
+from .common import (
+    _parse_bool,
+    _project_dir_or_none,
+    _project_file_or_none,
+    projects_bp,
+)
 
 def _safe_ascii(name):
     """ASCII-only fallback name for Content-Disposition filename= param."""
@@ -207,24 +212,26 @@ def export_project(project_id):
 @projects_bp.route('/<int:project_id>/transfer', methods=['GET'])
 def transfer_project(project_id):
     """Package a project as a ZIP file (transcripts + annotations + metadata, no audio)."""
-    import tempfile
+    import io
     import zipfile
 
     project = db.session.get(Project, project_id)
     if not project:
         return jsonify({'error': 'Project not found'}), 404
 
-    project_dir = os.path.join(_projects_root(), project.folder_name)
+    project_dir = _project_dir_or_none(project)
+    if not project_dir:
+        return jsonify({'error': 'Project folder is outside the projects directory'}), 409
 
     # Build project metadata
     meta = project.to_dict(include_recordings=True)
     tags = get_project_tags(project_dir)
     themes = get_project_themes(project_dir)
 
-    with tempfile.NamedTemporaryFile(suffix='.zip', delete=False) as tmp:
-        tmp_path = tmp.name
-
-    with zipfile.ZipFile(tmp_path, 'w', zipfile.ZIP_DEFLATED) as zf:
+    # In memory, not a temp file: there is no audio in here, and the temp file
+    # this used to be was never removed — a copy of every transcript per export.
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as zf:
         # Project metadata
         zf.writestr('project.json', json.dumps(meta, ensure_ascii=False, indent=2))
         zf.writestr('project_tags.json', json.dumps(tags, ensure_ascii=False, indent=2))
@@ -234,8 +241,8 @@ def transfer_project(project_id):
         for rec in project.recordings:
             # Transcript JSON
             if rec.transcript_path:
-                tx_file = os.path.join(project_dir, rec.transcript_path)
-                if os.path.isfile(tx_file):
+                tx_file = _project_file_or_none(project_dir, rec.transcript_path)
+                if tx_file and os.path.isfile(tx_file):
                     zf.write(tx_file, f'transcripts/{rec.transcript_path}')
 
             # Annotations JSON
@@ -250,8 +257,9 @@ def transfer_project(project_id):
             zf.write(readme_path, 'README.md')
 
     safe_name = _safe_ascii(project.name).replace(' ', '_')[:50]
+    buf.seek(0)
     return send_file(
-        tmp_path,
+        buf,
         mimetype='application/zip',
         as_attachment=True,
         download_name=f'{safe_name}_transfer.zip',

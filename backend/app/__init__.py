@@ -320,6 +320,31 @@ def _extra_allowed_hostnames():
     return {part.strip().lower() for part in raw.split(',') if part.strip()}
 
 
+# What a page may load or contact. The templates run inline scripts and inline
+# handlers, so 'unsafe-inline' stays and escaping is what keeps injected code
+# out. This policy covers the next step: nothing on a page can fetch, post,
+# or load an image or font from another machine, so a script that did get in
+# cannot carry transcripts off it. The loopback hosts with any port are the
+# supervisor, which lease.js heartbeats and which onboarding's handoff can
+# move to a new port; 'self' is the backend, WebSocket included.
+_LOOPBACK_HTTP = 'http://pine.localhost:* http://127.0.0.1:* http://localhost:*'
+_LOOPBACK_WS = 'ws://pine.localhost:* ws://127.0.0.1:* ws://localhost:*'
+_CONTENT_SECURITY_POLICY = '; '.join([
+    "default-src 'self'",
+    "script-src 'self' 'unsafe-inline'",
+    "style-src 'self' 'unsafe-inline'",
+    "img-src 'self' data: blob:",
+    "font-src 'self' data:",
+    "media-src 'self' blob:",
+    f"connect-src 'self' {_LOOPBACK_HTTP} {_LOOPBACK_WS}",
+    "worker-src 'self' blob:",
+    "object-src 'none'",
+    "base-uri 'none'",
+    "form-action 'self'",
+    "frame-ancestors 'none'",
+])
+
+
 def _host_is_allowed(host_header):
     """Whether a request arriving under this ``Host`` may be served at all.
 
@@ -420,6 +445,15 @@ def create_app(config_class=Config):
                         request.method, request.path, request.host)
             return jsonify({'error': 'Invalid host'}), 403
 
+        # Browsers say who is asking. Another site has no reason to touch the
+        # API at all — not to fetch it, not to embed /media in a <video> to
+        # probe a recording, not to navigate to browse-folder and open a native
+        # dialog. A missing header (curl, an old browser) is let through as before.
+        if (request.path.startswith('/api/')
+                and request.headers.get('Sec-Fetch-Site') == 'cross-site'):
+            log.warning('Refused %s %s: cross-site request', request.method, request.path)
+            return jsonify({'error': 'Cross-site request refused'}), 403
+
         if request.method in ('GET', 'HEAD', 'OPTIONS'):
             return None
 
@@ -461,6 +495,11 @@ def create_app(config_class=Config):
         if response.status_code >= 400:
             log.warning('%s %s -> %s', request.method, request.path,
                         response.status_code)
+        return response
+
+    @app.after_request
+    def _content_security_policy(response):
+        response.headers.setdefault('Content-Security-Policy', _CONTENT_SECURITY_POLICY)
         return response
 
     with app.app_context():
@@ -536,9 +575,12 @@ def create_app(config_class=Config):
             init_last_project_id = int(raw_lp)
         else:
             init_last_project_id = None
+        from .services.setting_rules import DEFAULT_FONT_SIZE, clean_setting
+        # font_size is written into a <style> block, where autoescaping does not
+        # stop CSS; a value stored before it was validated falls back here.
         return {
-            'init_font_size': s['font_size'],
-            'init_font_family': s['font_family'],
+            'init_font_size': clean_setting('font_size', s['font_size']) or DEFAULT_FONT_SIZE,
+            'init_font_family': clean_setting('font_family', s['font_family']) or 'inter',
             'init_theme': s['theme'],
             'init_last_project_id': init_last_project_id,
         }

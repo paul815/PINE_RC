@@ -12,6 +12,7 @@ from ...services.annotations import (
     get_project_tags,
 )
 from .common import (
+    _project_dir_or_none,
     _projects_root,
     _safe_folder_name,
     _write_project_readme,
@@ -85,11 +86,11 @@ def update_project(project_id):
         if new_name != project.name:
             project.name = new_name
             root = _projects_root()
-            old_folder = os.path.join(root, project.folder_name)
+            old_folder = _project_dir_or_none(project)
             existing = {p.folder_name for p in Project.query.filter(Project.id != project.id).all()}
             new_folder = _safe_folder_name(new_name, existing)
             new_path = os.path.join(root, new_folder)
-            if os.path.isdir(old_folder) and old_folder != new_path:
+            if old_folder and os.path.isdir(old_folder) and old_folder != new_path:
                 os.rename(old_folder, new_path)
             elif not os.path.isdir(new_path):
                 os.makedirs(new_path, exist_ok=True)
@@ -172,8 +173,8 @@ def delete_project(project_id):
     )
 
     import shutil
-    folder_path = os.path.join(_projects_root(), project.folder_name)
-    if os.path.isdir(folder_path):
+    folder_path = _project_dir_or_none(project)
+    if folder_path and os.path.isdir(folder_path):
         shutil.rmtree(folder_path, ignore_errors=True)
 
     lp = db.session.get(Setting, 'last_open_project_id')

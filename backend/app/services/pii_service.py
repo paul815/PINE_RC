@@ -133,7 +133,12 @@ def _load_model(app):
 
 
 def detect_pii(text, threshold=0.6):
-    """Detect PII entities in text. Returns list of {start, end, label, text}."""
+    """Detect PII entities in text. Returns list of {start, end, label, text}.
+
+    Raises PIIError if the detector fails. It used to log and return [],
+    which a caller cannot tell from "nothing found" — so an export asked to
+    remove PII went out unredacted, without a word to the user.
+    """
     if _gliner_model is None:
         return []
     try:
@@ -162,7 +167,7 @@ def detect_pii(text, threshold=0.6):
         return result
     except Exception as exc:
         log.warning('PII detection failed: %s', exc)
-        return []
+        raise PIIError(f'PII detection failed: {exc}') from exc
 
 
 def redact_text(text, entities=None, replacement='[REDACTED]'):

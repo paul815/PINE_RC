@@ -67,11 +67,17 @@ def _end_windows_hf_hub_no_symlinks(orig):
     except Exception:
         pass
 
+# Every model is fetched at a fixed commit (`revision`), not at whatever the
+# repo's main is that day: pyannote and GLiNER ship pickle weights, and some
+# repos sit on accounts PINE does not control. Each SHA below was main on
+# 2026-11-22 and matches the files PINE was verified with. To move a model on,
+# change its SHA deliberately and re-verify transcription on both platforms.
 MODEL_REGISTRY = {
     'whisperx-large-v3': {
         'name': 'WhisperX + faster-whisper large-v3',
         'function': 'stt',
         'repo_id': 'Systran/faster-whisper-large-v3',
+        'revision': 'edaa852ec7e145841d8ffdb056a99866b5f0a478',
         'size_bytes': 3_000_000_000,
         'required': True,
         'language': 'multi',
@@ -84,6 +90,7 @@ MODEL_REGISTRY = {
         'name': 'pyannote speaker-diarization-community-1',
         'function': 'diarization',
         'repo_id': 'pyannote/speaker-diarization-community-1',
+        'revision': '3533c8cf8e369892e6b79ff1bf80f7b0286a54ee',
         # Repo is pipeline config + small assets only (weights live in other pyannote_* entries).
         'size_bytes': 8_000_000,
         'required': True,
@@ -95,6 +102,7 @@ MODEL_REGISTRY = {
         'name': 'pyannote WeSpeaker embedding (diarization)',
         'function': 'diarization',
         'repo_id': 'pyannote/wespeaker-voxceleb-resnet34-LM',
+        'revision': '837717ddb9ff5507820346191109dc79c958d614',
         'size_bytes': 55_000_000,
         'required': True,
         'language': None,
@@ -104,11 +112,13 @@ MODEL_REGISTRY = {
         'name': 'GLiNER multilingual (PII removal)',
         'function': 'pii',
         'repo_id': 'urchade/gliner_multi_pii-v1',
+        'revision': '1fcf13e85f4eef5394e1fcd406cf2ca9ea82351d',
         'size_bytes': 1_800_000_000,
         'required': False,
         'language': None,
         # GLiNER needs the mdeberta tokenizer files locally to avoid runtime HF fetches
         'tokenizer_repo': 'microsoft/mdeberta-v3-base',
+        'tokenizer_revision': 'a0484667b22365f84929a935b5e50a51f71f159d',
         'tokenizer_files': [
             'spm.model', 'tokenizer_config.json', 'config.json',
         ],
@@ -597,6 +607,10 @@ def _warmup_pyannote_community1(models_path, hf_token=None):
             kwargs['use_auth_token'] = auth
         if 'cache_dir' in sig.parameters:
             kwargs['cache_dir'] = pyc
+        if 'revision' in sig.parameters:
+            # Network is still open during onboarding: without the pin the hub
+            # client would look up today's main instead of the commit downloaded.
+            kwargs['revision'] = MODEL_REGISTRY['pyannote-diarization']['revision']
 
         # torch 2.6+ refuses to unpickle the custom types pyannote checkpoints
         # carry. The worker relaxes torch.load for good; Flask borrows it for
@@ -623,6 +637,61 @@ def _warmup_pyannote_community1(models_path, hf_token=None):
     except Exception as exc:
         log.warning('pyannote community-1 warm-up failed: %s', exc)
         _install_emit(f'pyannote warm-up skipped: {exc}')
+
+def _point_main_at_revision(cache_dir, repo_id, revision):
+    """Make 'main' in PINE's own hub cache mean the pinned commit.
+
+    A download by commit hash writes no refs/main, but pyannote and
+    snapshot_dir_if_repo_cached both resolve 'main' in this cache — offline,
+    once onboarding is done. Without the ref the model could not be found and
+    would be fetched again on every launch.
+    """
+    refs = os.path.join(cache_dir, 'models--' + repo_id.replace('/', '--'), 'refs')
+    os.makedirs(refs, exist_ok=True)
+    from .file_utils import atomic_write_text
+    atomic_write_text(os.path.join(refs, 'main'), revision)
+
+
+def _fetch_model_files(info, dest, pyc_root, hf_token, hf_hub_download, snapshot_download):
+    """Download one registry model at its pinned revision; return where it landed."""
+    revision = info['revision']
+    if info.get('filename'):
+        hf_hub_download(
+            repo_id=info['repo_id'],
+            filename=info['filename'],
+            local_dir=dest,
+            token=hf_token,
+            revision=revision,
+        )
+        return dest
+    snap_kwargs = {'repo_id': info['repo_id'], 'token': hf_token, 'revision': revision}
+    if info.get('ignore_patterns'):
+        snap_kwargs['ignore_patterns'] = info['ignore_patterns']
+    if info.get('use_pyannote_hub_cache'):
+        final_path = snapshot_download(cache_dir=pyc_root, **snap_kwargs)
+        _point_main_at_revision(pyc_root, info['repo_id'], revision)
+        return final_path
+    snapshot_download(local_dir=dest, **snap_kwargs)
+    return dest
+
+
+def _fetch_tokenizer_files(info, dest, hf_token, hf_hub_download):
+    """Fetch the tokenizer files a model needs locally, at their pinned revision."""
+    tok_repo = info.get('tokenizer_repo')
+    for tf in info.get('tokenizer_files', []) if tok_repo else []:
+        if os.path.isfile(os.path.join(dest, tf)):
+            continue
+        try:
+            hf_hub_download(
+                repo_id=tok_repo,
+                filename=tf,
+                local_dir=dest,
+                token=hf_token,
+                revision=info['tokenizer_revision'],
+            )
+        except Exception as tok_exc:
+            log.warning('Tokenizer file %s download failed: %s', tf, tok_exc)
+
 
 def download_models(app, model_ids, models_path, hf_token=None, finish_onboarding=True, block=False):
     """Download all requested models in a background thread.
@@ -748,53 +817,17 @@ def download_models(app, model_ids, models_path, hf_token=None, finish_onboardin
                     mon.start()
 
                     try:
-                        final_path = dest
-                        if info.get('filename'):
-                            hf_hub_download(
-                                repo_id=info['repo_id'],
-                                filename=info['filename'],
-                                local_dir=dest,
-                                token=hf_token,
-                            )
-                        elif use_pyc:
-                            snap_kwargs = {
-                                'repo_id': info['repo_id'],
-                                'cache_dir': pyc_root,
-                                'token': hf_token,
-                            }
-                            if info.get('ignore_patterns'):
-                                snap_kwargs['ignore_patterns'] = info['ignore_patterns']
-                            final_path = snapshot_download(**snap_kwargs)
-                        else:
-                            snap_kwargs = {
-                                'repo_id': info['repo_id'],
-                                'local_dir': dest,
-                                'token': hf_token,
-                            }
-                            if info.get('ignore_patterns'):
-                                snap_kwargs['ignore_patterns'] = info['ignore_patterns']
-                            snapshot_download(**snap_kwargs)
-                            final_path = dest
+                        final_path = _fetch_model_files(
+                            info, dest, pyc_root, hf_token, hf_hub_download, snapshot_download,
+                        )
 
                         stop_evt.set()
                         mon.join(timeout=3)
 
                         # Download tokenizer files if the model needs them locally
-                        tok_repo = info.get('tokenizer_repo')
-                        tok_files = info.get('tokenizer_files', [])
-                        if tok_repo and tok_files:
+                        if info.get('tokenizer_repo') and info.get('tokenizer_files'):
                             _install_emit(f'Downloading tokenizer for {model.name}...')
-                            for tf in tok_files:
-                                if not os.path.isfile(os.path.join(dest, tf)):
-                                    try:
-                                        hf_hub_download(
-                                            repo_id=tok_repo,
-                                            filename=tf,
-                                            local_dir=dest,
-                                            token=hf_token,
-                                        )
-                                    except Exception as tok_exc:
-                                        log.warning('Tokenizer file %s download failed: %s', tf, tok_exc)
+                            _fetch_tokenizer_files(info, dest, hf_token, hf_hub_download)
 
                         model.status = 'ready'
                         model.path = final_path if use_pyc else dest

@@ -1395,11 +1395,11 @@ async function loadBackupList() {
       return '<div class="backup-item">'
         + '<div class="backup-meta">'
         + '<div class="backup-name">' + esc(b.filename) + '</div>'
-        + '<div class="backup-info">' + dateStr + ' &middot; ' + fmtBytes(b.size_bytes) + ' &middot; ' + b.project_count + ' projects' + audioTag + '</div>'
+        + '<div class="backup-info">' + dateStr + ' &middot; ' + fmtBytes(b.size_bytes) + ' &middot; ' + escNum(b.project_count) + ' projects' + audioTag + '</div>'
         + '</div>'
         + '<div class="backup-actions">'
-        + '<button class="btn-outline" onclick="openRestoreModal(\'' + esc(b.filename) + '\')">Restore</button>'
-        + '<button class="btn-outline btn-outline-danger" onclick="deleteBackup(\'' + esc(b.filename) + '\')">Delete</button>'
+        + '<button class="btn-outline" onclick="openRestoreModal(' + escJsAttr(b.filename) + ')">Restore</button>'
+        + '<button class="btn-outline btn-outline-danger" onclick="deleteBackup(' + escJsAttr(b.filename) + ')">Delete</button>'
         + '</div>'
         + '</div>';
     }).join('');
@@ -1448,7 +1448,7 @@ async function openRestoreModal(filename) {
     const m = _restoreManifest;
     const dt = new Date(m.created_at);
     let html = '<div style="font-size:0.923rem;color:var(--muted-fg);margin-bottom:10px">'
-      + dt.toLocaleDateString() + ' &middot; ' + m.project_count + ' projects &middot; ' + m.recording_count + ' recordings'
+      + dt.toLocaleDateString() + ' &middot; ' + escNum(m.project_count) + ' projects &middot; ' + escNum(m.recording_count) + ' recordings'
       + (m.include_audio ? ' &middot; includes audio' : '') + '</div>';
 
     html += '<div class="chk-row"><input type="checkbox" id="restoreSelectAll" checked onchange="toggleRestoreAll(this.checked)"><label for="restoreSelectAll" style="font-weight:500">Select all projects</label></div>';

@@ -387,8 +387,10 @@ def clean_transcript_segments(segments):
         if words_out:
             clean_seg['words'] = words_out
         if is_whisper_hallucination(clean_seg):
-            log.info('Dropped Whisper hallucination at %.1f-%.1fs: %r',
-                     start, end, text)
+            # Time range and length, not the text: a signature can match a
+            # whole segment around a credit, and logs travel in bug reports.
+            log.info('Dropped Whisper hallucination at %.1f-%.1fs (%d chars)',
+                     start, end, len(text))
             continue
         clean_segments.append(clean_seg)
     return clean_segments

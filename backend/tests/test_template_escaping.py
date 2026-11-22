@@ -99,6 +99,140 @@ def test_no_handler_lives_in_a_single_quoted_attribute(path):
     assert offenders == []
 
 
+# ── values inside hand-built attributes ──────────────────────────────────────
+#
+# Text and names were escaped; numbers and ids were not, on the assumption that
+# they are always numbers and ids. They come from files: transcripts,
+# annotations, attachments.json, project sections, a backup's manifest — and a
+# backup ZIP or a synced project folder can put anything there. So every value
+# inside an attribute goes through esc(), escJsAttr() or escNum(), unless it is
+# listed below as something the page or the server makes itself.
+
+_ATTR_WRAPPERS = re.compile(r'^(esc|escJsAttr|escNum|CSS\.escape|tagColor|safeHex)\(')
+# cond ? 'literal' : 'literal' — only ever one of two constants.
+_LITERAL_TERNARY = re.compile(
+    r"""^[^`]*\?\s*('[^']*'|"[^"]*")\s*:\s*('[^']*'|"[^"]*")$""")
+
+_DB_IDS = {'pid', 'p.id', 'r.id', 's.id', 'seg.id', 'segId', 'rid', 'recording_id',
+           'rec.id', 'recording.id', 'recordingId', 'data.project_id'}
+_RAW_ATTR_ALLOWED = {
+    'main.html': _DB_IDS | {
+        'safeTip', 'name',                       # esc()'d into the local already
+        'i+1', 'k', 'cls', 'active', 'unActive',  # loop index / built from constants
+        'removeFn', 'archiveAction', 'assignedColor', 'bd', 'bg', 'cFg',
+    },
+    'recording.html': _DB_IDS | {
+        'firstIdx', "indices.join(',')", 'i',    # positions the page computed
+        'cls', 'collapsedCls', 'hex', 'col', 'selectedTagColor',  # palette / class constants
+    },
+    'onboarding.html': {
+        # The system check is the server describing this machine, not stored data.
+        'c.download_url', 'c.status', 'pct', 'nameStyle',
+        "gpuCheck.download_url || 'https://developer.nvidia.com/cuda-downloads'",
+    },
+    'settings.html': set(),
+    'tags.html': _DB_IDS | {
+        'tagColor',                              # only after isKnownTagColor()
+        'hex', 'col', 'h',                       # safeHex() / the palette
+        'jumpUrl', 'timestamp',                  # Math.floor()'d: always a number
+    },
+}
+
+
+def _attribute_interpolations(source):
+    for number, line in enumerate(source.splitlines(), 1):
+        for match in re.finditer(r'\$\{([^{}]*)\}', line):
+            before = line[:match.start()]
+            attr = re.search(r'([a-zA-Z][\w-]*)=(["\'])([^"\']*)$', before)
+            if not attr:
+                continue
+            if attr.start(1) > 0 and before[attr.start(1) - 1] == '[':
+                continue  # a CSS selector, [data-x="${...}"], not markup
+            yield number, attr.group(1), match.group(1).strip()
+
+
+@pytest.mark.parametrize('path', HTML_FILES, ids=lambda p: p.name)
+def test_no_unescaped_value_inside_a_hand_built_attribute(path):
+    allowed = _RAW_ATTR_ALLOWED[path.name]
+    offenders = [
+        (number, attr, expr)
+        for number, attr, expr in _attribute_interpolations(_source(path))
+        if not (_ATTR_WRAPPERS.match(expr) or _LITERAL_TERNARY.match(expr)
+                or expr in allowed)
+    ]
+
+    assert offenders == []
+
+
+def test_settings_backup_list_does_not_concatenate_raw_manifest_values():
+    """The backup list is built with + rather than a template literal.
+
+    A ZIP dropped in through Upload — nothing restored — put its manifest
+    numbers into Settings, so its script ran every time the page opened.
+    """
+    source = _source(TEMPLATES / 'settings.html')
+    raw = re.findall(r"\+\s*([bm]\.(?:project_count|recording_count|backup_version))\b", source)
+
+    assert raw == []
+    assert not re.search(r"onclick=\"\w+\(\\'' \+ esc\(", source), \
+        "esc() inside a quoted JS string in a handler; use escJsAttr()"
+
+
+def test_speaker_colours_from_annotations_are_checked_against_known_classes():
+    """speaker_colors becomes a class name in markup; only the five real ones pass."""
+    source = _source(TEMPLATES / 'recording.html')
+    loop = re.search(r'Object\.entries\(speakerColors\)\.forEach\((.*?)\);\n', source, re.S)
+
+    assert loop, 'the speaker_colors loop moved; re-point this test'
+    assert '_SPK_CLASSES.includes' in loop.group(1)
+
+
+def test_comment_timestamp_is_escaped():
+    source = _source(TEMPLATES / 'recording.html')
+
+    assert '${c.created_at' not in source
+    assert re.search(r'esc\(c\.created_at', source)
+
+
+def test_dom_js_defines_escnum():
+    assert re.search(r'^function escNum\s*\(', _source(STATIC_JS / 'dom.js'), re.M)
+
+
+@pytest.mark.skipif(not shutil.which('node'), reason='node is not installed')
+@pytest.mark.parametrize('value, expected', [
+    (12, '12'), (12.5, '12.5'), ('7', '7'), (-3, '-3'), (0, '0'),
+    ('1"><img src=x onerror=alert(1)>', '0'), ('1);alert(1);//', '0'),
+    (None, '0'), ('', '0'), ('Infinity', '0'), ({}, '0'),
+])
+def test_escnum_lets_only_finite_numbers_through(value, expected, tmp_path):
+    script = tmp_path / 'num.js'
+    script.write_text(
+        _source(STATIC_JS / 'dom.js')
+        + f'\nprocess.stdout.write(escNum({json.dumps(value)}));',
+        encoding='utf-8')
+    result = subprocess.run([_node(), str(script)], capture_output=True,
+                            text=True, encoding='utf-8', timeout=30)
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == expected
+
+
+@pytest.mark.skipif(not shutil.which('node'), reason='node is not installed')
+def test_escnum_fallback_keeps_a_missing_value_missing(tmp_path):
+    """A word with no timestamp kept data-start="" — NaN when read back, so no seek."""
+    script = tmp_path / 'num.js'
+    script.write_text(
+        _source(STATIC_JS / 'dom.js')
+        + "\nprocess.stdout.write(JSON.stringify("
+          "[escNum(undefined, ''), escNum('x', ''), escNum(4.5, '')]));",
+        encoding='utf-8')
+    result = subprocess.run([_node(), str(script)], capture_output=True,
+                            text=True, encoding='utf-8', timeout=30)
+
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout) == ['', '', '4.5']
+
+
 def test_escjsattr_wraps_esc_around_json():
     """Order matters: JSON first for the JS parser, esc second for the HTML one."""
     source = _source(STATIC_JS / 'dom.js')

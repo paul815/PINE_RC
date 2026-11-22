@@ -36,6 +36,8 @@ from .common import (
     _mp4_faststart,
     _parse_bool,
     _probe_duration,
+    _project_dir_or_none,
+    _project_file_or_none,
     _projects_root,
     _recording_filepath,
     _segment_assigned_count,
@@ -110,13 +112,13 @@ def delete_single_transcription(recording_id):
     if not recording or recording.project_id != proj.id:
         return jsonify({'error': 'Recording not found'}), 404
 
-    project_dir = os.path.join(_projects_root(), proj.folder_name)
+    project_dir = _project_dir_or_none(proj)
     filepath = _recording_filepath(proj, recording)
-    if not recording.is_linked and os.path.isfile(filepath):
+    if not recording.is_linked and filepath and os.path.isfile(filepath):
         os.remove(filepath)
     if recording.transcript_path:
-        tf = os.path.join(project_dir, recording.transcript_path)
-        if os.path.isfile(tf):
+        tf = _project_file_or_none(project_dir, recording.transcript_path)
+        if tf and os.path.isfile(tf):
             os.remove(tf)
     _delete_recording_annotation_files(project_dir, recording)
 
@@ -435,7 +437,7 @@ def stream_media(project_id, recording_id):
         return jsonify({'error': 'Project not found'}), 404
 
     filepath = _recording_filepath(project, recording)
-    if not os.path.isfile(filepath):
+    if not filepath or not os.path.isfile(filepath):
         return jsonify({'error': 'Media file not found'}), 404
 
     from flask import send_file as flask_send_file
@@ -583,14 +585,14 @@ def delete_recording(project_id, recording_id):
 
     project = db.session.get(Project, project_id)
     if project:
-        project_dir = os.path.join(_projects_root(), project.folder_name)
+        project_dir = _project_dir_or_none(project)
         filepath = _recording_filepath(project, recording)
         # Only delete the media file if it was copied into the project folder
-        if not recording.is_linked and os.path.isfile(filepath):
+        if not recording.is_linked and filepath and os.path.isfile(filepath):
             os.remove(filepath)
         if recording.transcript_path:
-            transcript_file = os.path.join(project_dir, recording.transcript_path)
-            if os.path.isfile(transcript_file):
+            transcript_file = _project_file_or_none(project_dir, recording.transcript_path)
+            if transcript_file and os.path.isfile(transcript_file):
                 os.remove(transcript_file)
         _delete_recording_annotation_files(project_dir, recording)
 
