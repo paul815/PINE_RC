@@ -238,7 +238,14 @@ Recordings and transcripts **never** leave your machine. The app does open outbo
 
 Set `PINE_ALLOW_HF_NETWORK=1` to skip Hub offline mode entirely. Not needed for normal use.
 
-**Threat model.** PINE is a single-user local application. The backend binds to `127.0.0.1` (port 5000 by default, or the next free one) and CORS is limited to `127.0.0.1` and `pine.localhost` on that port — but the backend has **no authentication**, so treat it like any other local dev server and do not expose the port to a network you do not control. The supervisor's control API on port 5001 (or the next free one) requires a per-run token for everything except its `/status` probe. Known gaps are listed under [Limitations](#limitations); to report a vulnerability see [SECURITY.md](.github/SECURITY.md).
+**Threat model.** PINE is a single-user local application. The backend binds to `127.0.0.1` (port 5000 by default, or the next free one) and has **no authentication**, so treat it like any other local dev server and do not expose the port to a network you do not control. What keeps other websites open in the same browser away from it:
+
+- **Host check.** A request naming anything but a loopback host is refused with `403`, which closes DNS rebinding.
+- **Origin check.** A `POST`, `PATCH` or `DELETE` from another origin is refused, and so is any cross-site request to `/api`.
+- **CORS** lets only `127.0.0.1` and `pine.localhost` on that port read replies.
+- **Content-Security-Policy.** Pages may fetch, post, and load images and fonts only from this machine, so injected script has nowhere to send a transcript.
+
+Running PINE behind a reverse proxy under a real hostname? List that name in `PINE_ALLOWED_HOSTS` (comma-separated), or the Host check will refuse it. The supervisor's control API on port 5001 (or the next free one) requires a per-run token for everything except its `/status` probe. Known gaps are listed under [Limitations](#limitations); to report a vulnerability see [SECURITY.md](.github/SECURITY.md).
 
 ---
 
@@ -253,6 +260,8 @@ Set `PINE_ALLOW_HF_NETWORK=1` to skip Hub offline mode entirely. Not needed for 
 | Blank "Access to 127.0.0.1 was denied — HTTP ERROR 403" on a Mac | That is the AirPlay Receiver, which holds port 5000 on macOS 12 and later, answering in PINE's place. Current PINE moves to the next free port on its own; with an older copy, turn off AirPlay Receiver in System Settings → General → AirDrop & Handoff |
 | Browser never opens | Go to `http://127.0.0.1:5000/` by hand. On Linux this is expected — the launcher uses the macOS `open` command |
 | Transcription stuck | After 2 hours without progress a watchdog marks the recording as failed, kills the hung worker and starts a fresh one, and the queue moves on. A job cut short by closing the app goes back to the queue on the next start. Details in `backend/logs/` |
+| Export with PII removal fails with "PII removal failed" or "GLiNER … not available" | On purpose: when the detector cannot run, PINE stops the export rather than send it out unredacted. Reinstall the PII model in Settings, or export without PII removal |
+| `403 Invalid host` | The page was opened under a name other than `127.0.0.1`, `localhost` or `pine.localhost`. Use one of those, or add the name to `PINE_ALLOWED_HOSTS` if PINE sits behind a reverse proxy |
 | Install broken beyond repair | `backend/reset_win.bat` or `backend/reset.command` — it puts the installer back in the folder — then run the installer again |
 | "Smart App Control blocked a file that may be unsafe", or "publisher could not be verified" | Windows blocks unsigned scripts unpacked from a downloaded ZIP — see [the note on the unsigned launcher](#unsigned-launcher). Cloning instead of downloading avoids it entirely |
 
